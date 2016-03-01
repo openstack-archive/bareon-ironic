@@ -1,0 +1,5 @@
+# The driver uses Ironic code base and it's requirements, no additional
+# requirements needed
+# Since Ironic is not published to pip, Ironic must be installed on the system
+# before test run
+#ironic>=4.3.0
