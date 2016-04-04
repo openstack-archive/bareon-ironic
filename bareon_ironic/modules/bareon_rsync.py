@@ -18,8 +18,7 @@ Bareon Rsync deploy driver.
 """
 
 from oslo_config import cfg
-
-from ironic.openstack.common import log
+from oslo_log import log
 
 from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules import bareon_base

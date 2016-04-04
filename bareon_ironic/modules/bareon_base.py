@@ -27,6 +27,9 @@ import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_utils import excutils
+from oslo_utils import fileutils
+from oslo_log import log
+from oslo_service import loopingcall
 
 from ironic.common import boot_devices
 from ironic.common import dhcp_factory
@@ -45,9 +48,6 @@ from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.objects import node as db_node
-from ironic.openstack.common import fileutils
-from ironic.openstack.common import log
-from ironic.openstack.common import loopingcall
 
 from bareon_ironic.modules import bareon_exception
 from bareon_ironic.modules import bareon_utils
@@ -154,6 +154,24 @@ def _create_rootfs_link(task):
     return rootfs
 
 
+def _clean_up_images(task):
+    node = task.node
+    if node.instance_info.get('images_cleaned_up', False):
+        return
+    try:
+        with open(get_tenant_images_json_path(node)) as f:
+            images_json = json.loads(f.read())
+    except Exception as ex:
+        LOG.warning("Cannot find tenant_images.json for the %s node to"
+                    "finish cleanup." % node)
+        LOG.warning(str(ex))
+    else:
+        images = resources.ResourceList.from_dict(images_json, task)
+        images.cleanup_resources()
+        bareon_utils.change_node_dict(task.node, 'instance_info',
+                                      {'images_cleaned_up': True})
+
+
 class BareonDeploy(base.DeployInterface):
     """Interface for deploy-related actions."""
 
@@ -238,6 +256,7 @@ class BareonDeploy(base.DeployInterface):
         # - Resources such as provision.json are left till the node is
         # unprovisioned to simplify debugging.
         self._clean_up_pxe(task)
+        _clean_up_images(task)
         self._clean_up_resource_dirs(task)
 
     def take_over(self, task):
@@ -848,21 +867,8 @@ class BareonVendor(base.VendorInterface):
                      "result {0}".format("#" * 40, node_uuid))
 
     def _clean_up_deployment_resources(self, task):
-        self._clean_up_images(task)
+        _clean_up_images(task)
         self._clean_up_actions(task)
-
-    def _clean_up_images(self, task):
-        node = task.node
-        try:
-            with open(get_tenant_images_json_path(node)) as f:
-                images_json = json.loads(f.read())
-        except Exception as ex:
-            LOG.warning("Cannot find tenant_images.json for the %s node to"
-                        "finish cleanup." % node)
-            LOG.warning(str(ex))
-        else:
-            images = resources.ResourceList.from_dict(images_json, task)
-            images.cleanup_resources()
 
     def _clean_up_actions(self, task):
         filename = get_actions_json_path(task.node)
