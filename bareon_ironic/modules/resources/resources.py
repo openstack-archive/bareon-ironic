@@ -19,14 +19,14 @@ import os
 
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from oslo_utils import fileutils
+from oslo_log import log
 from six.moves.urllib import parse
 
 from ironic.common import exception
 from ironic.common import utils
 from ironic.common.i18n import _
 from ironic.drivers.modules import image_cache
-from ironic.openstack.common import fileutils
-from ironic.openstack.common import log
 
 from bareon_ironic.modules import bareon_exception
 from bareon_ironic.modules import bareon_utils

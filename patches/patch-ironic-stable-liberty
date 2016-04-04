@@ -1,0 +1,508 @@
+diff --git a/ironic/api/controllers/v1/node.py b/ironic/api/controllers/v1/node.py
+index d95298f..1b99c68 100644
+--- a/ironic/api/controllers/v1/node.py
++++ b/ironic/api/controllers/v1/node.py
+@@ -452,8 +452,13 @@ class NodeStatesController(rest.RestController):
+             raise exception.NodeInMaintenance(op=_('provisioning'),
+                                               node=rpc_node.uuid)
+ 
++        driver = api_utils.get_driver_by_name(rpc_node.driver)
++        driver_can_terminate = (driver and
++                                driver.deploy.can_terminate_deployment)
++
+         m = ir_states.machine.copy()
+         m.initialize(rpc_node.provision_state)
++
+         if not m.is_actionable_event(ir_states.VERBS.get(target, target)):
+             # Normally, we let the task manager recognize and deal with
+             # NodeLocked exceptions. However, that isn't done until the RPC
+@@ -470,6 +475,16 @@ class NodeStatesController(rest.RestController):
+                 action=target, node=rpc_node.uuid,
+                 state=rpc_node.provision_state)
+ 
++        # Note(obereozvskyi): we need to check weather driver supports deploy
++        # terminating
++        if (m.current_state == ir_states.DEPLOYING and
++            target == ir_states.DELETED and
++            not driver_can_terminate):
++
++            raise exception.InvalidStateRequested(
++                action=target, node=rpc_node.uuid,
++                state=rpc_node.provision_state)
++
+         if configdrive and target != ir_states.ACTIVE:
+             msg = (_('Adding a config drive is only supported when setting '
+                      'provision state to %s') % ir_states.ACTIVE)
+diff --git a/ironic/api/controllers/v1/utils.py b/ironic/api/controllers/v1/utils.py
+index 538ca45..3715d41 100644
+--- a/ironic/api/controllers/v1/utils.py
++++ b/ironic/api/controllers/v1/utils.py
+@@ -23,6 +23,7 @@ from webob.static import FileIter
+ import wsme
+ 
+ from ironic.api.controllers.v1 import versions
++from ironic.common import driver_factory
+ from ironic.common import exception
+ from ironic.common.i18n import _
+ from ironic.common import states
+@@ -109,7 +110,16 @@ def is_valid_node_name(name):
+     :param: name: the node name to check.
+     :returns: True if the name is valid, False otherwise.
+     """
+-    return is_valid_logical_name(name) and not uuidutils.is_uuid_like(name)
++    return utils.is_hostname_safe(name) and (not uuidutils.is_uuid_like(name))
++
++
++def get_driver_by_name(driver_name):
++    _driver_factory = driver_factory.DriverFactory()
++    try:
++        driver = _driver_factory[driver_name]
++        return driver.obj
++    except Exception:
++        return None
+ 
+ 
+ def is_valid_logical_name(name):
+diff --git a/ironic/common/context.py b/ironic/common/context.py
+index ccd2222..b8186c9 100644
+--- a/ironic/common/context.py
++++ b/ironic/common/context.py
+@@ -65,5 +65,4 @@ class RequestContext(context.RequestContext):
+     @classmethod
+     def from_dict(cls, values):
+         values.pop('user', None)
+-        values.pop('tenant', None)
+         return cls(**values)
+diff --git a/ironic/common/images.py b/ironic/common/images.py
+index 5b00e65..28e6bd7 100644
+--- a/ironic/common/images.py
++++ b/ironic/common/images.py
+@@ -328,16 +328,17 @@ def convert_image(source, dest, out_format, run_as_root=False):
+     utils.execute(*cmd, run_as_root=run_as_root)
+ 
+ 
+-def fetch(context, image_href, path, force_raw=False):
++def fetch(context, image_href, path, force_raw=False, image_service=None):
+     # TODO(vish): Improve context handling and add owner and auth data
+     #             when it is added to glance.  Right now there is no
+     #             auth checking in glance, so we assume that access was
+     #             checked before we got here.
+-    image_service = service.get_image_service(image_href,
+-                                              context=context)
+-    LOG.debug("Using %(image_service)s to download image %(image_href)s." %
+-              {'image_service': image_service.__class__,
+-               'image_href': image_href})
++    if not image_service:
++        image_service = service.get_image_service(image_href,
++                                                  context=context)
++        LOG.debug("Using %(image_service)s to download image %(image_href)s." %
++                  {'image_service': image_service.__class__,
++                   'image_href': image_href})
+ 
+     with fileutils.remove_path_on_error(path):
+         with open(path, "wb") as image_file:
+diff --git a/ironic/common/states.py b/ironic/common/states.py
+index e61c807..2523a7f 100644
+--- a/ironic/common/states.py
++++ b/ironic/common/states.py
+@@ -245,6 +245,9 @@ machine.add_state(INSPECTFAIL, target=MANAGEABLE, **watchers)
+ # A deployment may fail
+ machine.add_transition(DEPLOYING, DEPLOYFAIL, 'fail')
+ 
++# A deployment may be terminated
++machine.add_transition(DEPLOYING, DELETING, 'delete')
++
+ # A failed deployment may be retried
+ # ironic/conductor/manager.py:do_node_deploy()
+ machine.add_transition(DEPLOYFAIL, DEPLOYING, 'rebuild')
+diff --git a/ironic/common/swift.py b/ironic/common/swift.py
+index 8fa2d65..14d6b55 100644
+--- a/ironic/common/swift.py
++++ b/ironic/common/swift.py
+@@ -24,6 +24,7 @@ from swiftclient import utils as swift_utils
+ from ironic.common import exception
+ from ironic.common.i18n import _
+ from ironic.common import keystone
++from ironic.common import utils
+ 
+ swift_opts = [
+     cfg.IntOpt('swift_max_retries',
+@@ -36,6 +37,13 @@ swift_opts = [
+ CONF = cfg.CONF
+ CONF.register_opts(swift_opts, group='swift')
+ 
++CONF.import_opt('swift_endpoint_url',
++                'ironic.common.glance_service.v2.image_service',
++                group='glance')
++CONF.import_opt('swift_api_version',
++                'ironic.common.glance_service.v2.image_service',
++                group='glance')
++
+ CONF.import_opt('admin_user', 'keystonemiddleware.auth_token',
+                 group='keystone_authtoken')
+ CONF.import_opt('admin_tenant_name', 'keystonemiddleware.auth_token',
+@@ -62,7 +70,9 @@ class SwiftAPI(object):
+                  tenant_name=CONF.keystone_authtoken.admin_tenant_name,
+                  key=CONF.keystone_authtoken.admin_password,
+                  auth_url=CONF.keystone_authtoken.auth_uri,
+-                 auth_version=CONF.keystone_authtoken.auth_version):
++                 auth_version=CONF.keystone_authtoken.auth_version,
++                 preauthtoken=None,
++                 preauthtenant=None):
+         """Constructor for creating a SwiftAPI object.
+ 
+         :param user: the name of the user for Swift account
+@@ -70,16 +80,41 @@ class SwiftAPI(object):
+         :param key: the 'password' or key to authenticate with
+         :param auth_url: the url for authentication
+         :param auth_version: the version of api to use for authentication
++        :param preauthtoken: authentication token (if you have already
++                     authenticated) note authurl/user/key/tenant_name
++                     are not required when specifying preauthtoken
++        :param preauthtenant a tenant that will be accessed using the
++                     preauthtoken
+         """
+-        auth_url = keystone.get_keystone_url(auth_url, auth_version)
+-        params = {'retries': CONF.swift.swift_max_retries,
+-                  'insecure': CONF.keystone_authtoken.insecure,
+-                  'cacert': CONF.keystone_authtoken.cafile,
+-                  'user': user,
+-                  'tenant_name': tenant_name,
+-                  'key': key,
+-                  'authurl': auth_url,
+-                  'auth_version': auth_version}
++        params = {
++            'retries': CONF.swift.swift_max_retries,
++            'insecure': CONF.keystone_authtoken.insecure,
++            'cacert': CONF.keystone_authtoken.cafile
++        }
++
++        if preauthtoken:
++            # Determining swift url for the user's tenant account.
++            tenant_id = utils.get_tenant_id(tenant_name=preauthtenant)
++            url = "{endpoint}/{api_ver}/AUTH_{tenant}".format(
++                endpoint=CONF.glance.swift_endpoint_url,
++                api_ver=CONF.glance.swift_api_version,
++                tenant=tenant_id
++            )
++            # authurl/user/key/tenant_name are not required when specifying
++            # preauthtoken
++            params.update({
++                'preauthtoken': preauthtoken,
++                'preauthurl': url
++            })
++        else:
++            auth_url = keystone.get_keystone_url(auth_url, auth_version)
++            params.update({
++                'user': user,
++                'tenant_name': tenant_name,
++                'key': key,
++                'authurl': auth_url,
++                'auth_version': auth_version
++            })
+ 
+         self.connection = swift_client.Connection(**params)
+ 
+@@ -131,8 +166,8 @@ class SwiftAPI(object):
+             operation = _("head account")
+             raise exception.SwiftOperationError(operation=operation,
+                                                 error=e)
+-
+-        storage_url, token = self.connection.get_auth()
++        storage_url = (self.connection.os_options.get('object_storage_url') or
++                       self.connection.get_auth()[0])
+         parse_result = parse.urlparse(storage_url)
+         swift_object_path = '/'.join((parse_result.path, container, object))
+         temp_url_key = account_info['x-account-meta-temp-url-key']
+@@ -189,3 +224,23 @@ class SwiftAPI(object):
+         except swift_exceptions.ClientException as e:
+             operation = _("post object")
+             raise exception.SwiftOperationError(operation=operation, error=e)
++
++    def get_object(self, container, object, object_headers=None,
++                   chunk_size=None):
++        """Get Swift object.
++
++        :param container: The name of the container in which Swift object
++            is placed.
++        :param object: The name of the object in Swift
++        :param object_headers: the headers for the object to pass to Swift
++        :param chunk_size: size of the chunk used read to read from response
++        :returns: Tuple (body, headers)
++        :raises: SwiftOperationError, if operation with Swift fails.
++        """
++        try:
++            return self.connection.get_object(container, object,
++                                              headers=object_headers,
++                                              resp_chunk_size=chunk_size)
++        except swift_exceptions.ClientException as e:
++            operation = _("get object")
++            raise exception.SwiftOperationError(operation=operation, error=e)
+diff --git a/ironic/common/utils.py b/ironic/common/utils.py
+index f863087..ed4398f 100644
+--- a/ironic/common/utils.py
++++ b/ironic/common/utils.py
+@@ -42,6 +42,7 @@ from ironic.common import exception
+ from ironic.common.i18n import _
+ from ironic.common.i18n import _LE
+ from ironic.common.i18n import _LW
++from ironic.common import keystone
+ 
+ utils_opts = [
+     cfg.StrOpt('rootwrap_config',
+@@ -560,6 +561,11 @@ def is_http_url(url):
+     return url.startswith('http://') or url.startswith('https://')
+ 
+ 
++def get_tenant_id(tenant_name):
++    ksclient = keystone._get_ksclient()
++    return ksclient.tenants.find(name=tenant_name).to_dict()['id']
++
++
+ def check_dir(directory_to_check=None, required_space=1):
+     """Check a directory is usable.
+ 
+diff --git a/ironic/conductor/manager.py b/ironic/conductor/manager.py
+index b4bee31..e5bb190 100644
+--- a/ironic/conductor/manager.py
++++ b/ironic/conductor/manager.py
+@@ -768,6 +768,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
+         """
+         LOG.debug("RPC do_node_tear_down called for node %s." % node_id)
+ 
++        with task_manager.acquire(context, node_id, shared=True) as task:
++            if (task.node.provision_state == states.DEPLOYING and
++                    task.driver.deploy.can_terminate_deployment):
++                task.driver.deploy.terminate_deployment(task)
+         with task_manager.acquire(context, node_id, shared=False,
+                                   purpose='node tear down') as task:
+             try:
+diff --git a/ironic/drivers/base.py b/ironic/drivers/base.py
+index 098b7a0..6ebe05d 100644
+--- a/ironic/drivers/base.py
++++ b/ironic/drivers/base.py
+@@ -345,6 +345,13 @@ class DeployInterface(BaseInterface):
+         """
+         pass
+ 
++    def terminate_deployment(self, *args, **kwargs):
++        pass
++
++    @property
++    def can_terminate_deployment(self):
++        return False
++
+ 
+ @six.add_metaclass(abc.ABCMeta)
+ class BootInterface(object):
+diff --git a/ironic/drivers/modules/image_cache.py b/ironic/drivers/modules/image_cache.py
+index 8bb1e23..8e1a921 100644
+--- a/ironic/drivers/modules/image_cache.py
++++ b/ironic/drivers/modules/image_cache.py
+@@ -27,6 +27,7 @@ from oslo_concurrency import lockutils
+ from oslo_config import cfg
+ from oslo_log import log as logging
+ from oslo_utils import fileutils
++from oslo_utils import uuidutils
+ import six
+ 
+ from ironic.common import exception
+@@ -60,7 +61,8 @@ _cache_cleanup_list = []
+ class ImageCache(object):
+     """Class handling access to cache for master images."""
+ 
+-    def __init__(self, master_dir, cache_size, cache_ttl):
++    def __init__(self, master_dir, cache_size, cache_ttl,
++                 image_service=None):
+         """Constructor.
+ 
+         :param master_dir: cache directory to work on
+@@ -70,6 +72,7 @@ class ImageCache(object):
+         self.master_dir = master_dir
+         self._cache_size = cache_size
+         self._cache_ttl = cache_ttl
++        self._image_service = image_service
+         if master_dir is not None:
+             fileutils.ensure_tree(master_dir)
+ 
+@@ -94,23 +97,28 @@ class ImageCache(object):
+             # NOTE(ghe): We don't share images between instances/hosts
+             if not CONF.parallel_image_downloads:
+                 with lockutils.lock(img_download_lock_name, 'ironic-'):
+-                    _fetch(ctx, href, dest_path, force_raw)
++                    _fetch(ctx, href, dest_path,
++                           image_service=self._image_service,
++                           force_raw=force_raw)
+             else:
+-                _fetch(ctx, href, dest_path, force_raw)
++                _fetch(ctx, href, dest_path, image_service=self._image_service,
++                           force_raw=force_raw)
+             return
+ 
+         # TODO(ghe): have hard links and counts the same behaviour in all fs
+ 
+-        # NOTE(vdrok): File name is converted to UUID if it's not UUID already,
+-        # so that two images with same file names do not collide
+-        if service_utils.is_glance_image(href):
+-            master_file_name = service_utils.parse_image_ref(href)[0]
++        if uuidutils.is_uuid_like(href):
++            master_file_name = href
++
++        elif (self._image_service and
++              hasattr(self._image_service, 'get_image_unique_id')):
++            master_file_name = self._image_service.get_image_unique_id(href)
++
+         else:
+-            # NOTE(vdrok): Doing conversion of href in case it's unicode
+-            # string, UUID cannot be generated for unicode strings on python 2.
+             href_encoded = href.encode('utf-8') if six.PY2 else href
+             master_file_name = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                               href_encoded))
++
+         master_path = os.path.join(self.master_dir, master_file_name)
+ 
+         if CONF.parallel_image_downloads:
+@@ -121,8 +129,8 @@ class ImageCache(object):
+             # NOTE(vdrok): After rebuild requested image can change, so we
+             # should ensure that dest_path and master_path (if exists) are
+             # pointing to the same file and their content is up to date
+-            cache_up_to_date = _delete_master_path_if_stale(master_path, href,
+-                                                            ctx)
++            cache_up_to_date = _delete_master_path_if_stale(
++                master_path, href, ctx, img_service=self._image_service)
+             dest_up_to_date = _delete_dest_path_if_stale(master_path,
+                                                          dest_path)
+ 
+@@ -168,7 +176,8 @@ class ImageCache(object):
+         tmp_path = os.path.join(tmp_dir, href.split('/')[-1])
+ 
+         try:
+-            _fetch(ctx, href, tmp_path, force_raw)
++            _fetch(ctx, href, tmp_path, force_raw,
++                   image_service=self._image_service)
+             # NOTE(dtantsur): no need for global lock here - master_path
+             # will have link count >1 at any moment, so won't be cleaned up
+             os.link(tmp_path, master_path)
+@@ -308,10 +317,11 @@ def _free_disk_space_for(path):
+     return stat.f_frsize * stat.f_bavail
+ 
+ 
+-def _fetch(context, image_href, path, force_raw=False):
++def _fetch(context, image_href, path, force_raw=False, image_service=None):
+     """Fetch image and convert to raw format if needed."""
+     path_tmp = "%s.part" % path
+-    images.fetch(context, image_href, path_tmp, force_raw=False)
++    images.fetch(context, image_href, path_tmp, force_raw=False,
++                 image_service=image_service)
+     # Notes(yjiang5): If glance can provide the virtual size information,
+     # then we can firstly clean cache and then invoke images.fetch().
+     if force_raw:
+@@ -384,7 +394,7 @@ def cleanup(priority):
+     return _add_property_to_class_func
+ 
+ 
+-def _delete_master_path_if_stale(master_path, href, ctx):
++def _delete_master_path_if_stale(master_path, href, ctx, img_service=None):
+     """Delete image from cache if it is not up to date with href contents.
+ 
+     :param master_path: path to an image in master cache
+@@ -397,7 +407,8 @@ def _delete_master_path_if_stale(master_path, href, ctx):
+         # Glance image contents cannot be updated without changing image's UUID
+         return os.path.exists(master_path)
+     if os.path.exists(master_path):
+-        img_service = image_service.get_image_service(href, context=ctx)
++        if not img_service:
++            img_service = image_service.get_image_service(href, context=ctx)
+         img_mtime = img_service.show(href).get('updated_at')
+         if not img_mtime:
+             # This means that href is not a glance image and doesn't have an
+diff --git a/ironic/tests/common/test_swift.py b/ironic/tests/common/test_swift.py
+index 43e3ef0..b2632c4 100644
+--- a/ironic/tests/common/test_swift.py
++++ b/ironic/tests/common/test_swift.py
+@@ -120,6 +120,7 @@ class SwiftTestCase(base.TestCase):
+         connection_obj_mock.get_auth.return_value = auth
+         head_ret_val = {'x-account-meta-temp-url-key': 'secretkey'}
+         connection_obj_mock.head_account.return_value = head_ret_val
++        connection_obj_mock.os_options = {}
+         gen_temp_url_mock.return_value = 'temp-url-path'
+         temp_url_returned = swiftapi.get_temp_url('container', 'object', 10)
+         connection_obj_mock.get_auth.assert_called_once_with()
+diff --git a/ironic/tests/drivers/test_image_cache.py b/ironic/tests/drivers/test_image_cache.py
+index 3d666cd..436aa49 100644
+--- a/ironic/tests/drivers/test_image_cache.py
++++ b/ironic/tests/drivers/test_image_cache.py
+@@ -59,7 +59,7 @@ class TestImageCacheFetch(base.TestCase):
+         self.cache.fetch_image(self.uuid, self.dest_path)
+         self.assertFalse(mock_download.called)
+         mock_fetch.assert_called_once_with(
+-            None, self.uuid, self.dest_path, True)
++            None, self.uuid, self.dest_path, True, image_service=None)
+         self.assertFalse(mock_clean_up.called)
+ 
+     @mock.patch.object(image_cache.ImageCache, 'clean_up', autospec=True)
+@@ -75,7 +75,7 @@ class TestImageCacheFetch(base.TestCase):
+             mock_clean_up):
+         self.cache.fetch_image(self.uuid, self.dest_path)
+         mock_cache_upd.assert_called_once_with(self.master_path, self.uuid,
+-                                               None)
++                                               None, img_service=None)
+         mock_dest_upd.assert_called_once_with(self.master_path, self.dest_path)
+         self.assertFalse(mock_link.called)
+         self.assertFalse(mock_download.called)
+@@ -94,7 +94,7 @@ class TestImageCacheFetch(base.TestCase):
+             mock_clean_up):
+         self.cache.fetch_image(self.uuid, self.dest_path)
+         mock_cache_upd.assert_called_once_with(self.master_path, self.uuid,
+-                                               None)
++                                               None, img_service=None)
+         mock_dest_upd.assert_called_once_with(self.master_path, self.dest_path)
+         mock_link.assert_called_once_with(self.master_path, self.dest_path)
+         self.assertFalse(mock_download.called)
+@@ -113,7 +113,7 @@ class TestImageCacheFetch(base.TestCase):
+             mock_clean_up):
+         self.cache.fetch_image(self.uuid, self.dest_path)
+         mock_cache_upd.assert_called_once_with(self.master_path, self.uuid,
+-                                               None)
++                                               None, img_service=None)
+         mock_dest_upd.assert_called_once_with(self.master_path, self.dest_path)
+         self.assertFalse(mock_link.called)
+         mock_download.assert_called_once_with(
+@@ -134,7 +134,7 @@ class TestImageCacheFetch(base.TestCase):
+             mock_clean_up):
+         self.cache.fetch_image(self.uuid, self.dest_path)
+         mock_cache_upd.assert_called_once_with(self.master_path, self.uuid,
+-                                               None)
++                                               None, img_service=None)
+         mock_dest_upd.assert_called_once_with(self.master_path, self.dest_path)
+         self.assertFalse(mock_link.called)
+         mock_download.assert_called_once_with(
+@@ -158,7 +158,7 @@ class TestImageCacheFetch(base.TestCase):
+ 
+     @mock.patch.object(image_cache, '_fetch', autospec=True)
+     def test__download_image(self, mock_fetch):
+-        def _fake_fetch(ctx, uuid, tmp_path, *args):
++        def _fake_fetch(ctx, uuid, tmp_path, *args, **kwargs):
+             self.assertEqual(self.uuid, uuid)
+             self.assertNotEqual(self.dest_path, tmp_path)
+             self.assertNotEqual(os.path.dirname(tmp_path), self.master_dir)
+@@ -430,7 +430,7 @@ class TestImageCacheCleanUp(base.TestCase):
+     @mock.patch.object(utils, 'rmtree_without_raise', autospec=True)
+     @mock.patch.object(image_cache, '_fetch', autospec=True)
+     def test_temp_images_not_cleaned(self, mock_fetch, mock_rmtree):
+-        def _fake_fetch(ctx, uuid, tmp_path, *args):
++        def _fake_fetch(ctx, uuid, tmp_path, *args, **kwargs):
+             with open(tmp_path, 'w') as fp:
+                 fp.write("TEST" * 10)
+ 
+@@ -675,7 +675,8 @@ class TestFetchCleanup(base.TestCase):
+         mock_size.return_value = 100
+         image_cache._fetch('fake', 'fake-uuid', '/foo/bar', force_raw=True)
+         mock_fetch.assert_called_once_with('fake', 'fake-uuid',
+-                                           '/foo/bar.part', force_raw=False)
++                                           '/foo/bar.part', image_service=None,
++                                           force_raw=False)
+         mock_clean.assert_called_once_with('/foo', 100)
+         mock_raw.assert_called_once_with('fake-uuid', '/foo/bar',
+                                          '/foo/bar.part')
+
