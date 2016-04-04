@@ -17,8 +17,7 @@
 import os
 
 from oslo_config import cfg
-
-from ironic.openstack.common import log
+from oslo_log import log
 
 rsync_opts = [
     cfg.StrOpt('rsync_server',
