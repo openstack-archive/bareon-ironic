@@ -27,6 +27,9 @@ import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_utils import excutils
+from oslo_utils import fileutils
+from oslo_log import log
+from oslo_service import loopingcall
 
 from ironic.common import boot_devices
 from ironic.common import dhcp_factory
@@ -45,9 +48,6 @@ from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.objects import node as db_node
-from ironic.openstack.common import fileutils
-from ironic.openstack.common import log
-from ironic.openstack.common import loopingcall
 
 from bareon_ironic.modules import bareon_exception
 from bareon_ironic.modules import bareon_utils
@@ -270,19 +270,6 @@ class BareonDeploy(base.DeployInterface):
             utils.unlink_without_raise(path)
         AgentTFTPImageCache().clean_up()
         pxe_utils.clean_up_pxe_config(task)
-
-    def _clean_up_images(self, task):
-        node = task.node
-        try:
-            with open(get_tenant_images_json_path(node)) as f:
-                images_json = json.loads(f.read())
-        except Exception as ex:
-            LOG.warning("Cannot find tenant_images.json for the %s node to"
-                        "finish cleanup." % node)
-            LOG.warning(str(ex))
-        else:
-            images = resources.ResourceList.from_dict(images_json, task)
-            images.cleanup_resources()
 
     def _fetch_resources(self, task):
         self._fetch_provision_json(task)

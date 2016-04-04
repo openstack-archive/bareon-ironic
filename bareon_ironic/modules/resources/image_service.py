@@ -22,6 +22,7 @@ import uuid
 
 from oslo_config import cfg
 from oslo_concurrency import processutils
+from oslo_log import log as logging
 from oslo_utils import uuidutils
 import requests
 import six
@@ -29,7 +30,6 @@ import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
 from ironic.common.i18n import _
-from ironic.openstack.common import log as logging
 from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import utils
