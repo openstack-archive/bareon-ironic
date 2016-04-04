@@ -23,6 +23,7 @@ import tempfile
 import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import strutils
 
 from ironic.common import dhcp_factory
@@ -30,7 +31,6 @@ from ironic.common import exception
 from ironic.common import keystone
 from ironic.common import utils
 from ironic.common.i18n import _, _LW
-from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF

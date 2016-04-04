@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from ironic.drivers import base
-from ironic.drivers.modules import discoverd
+from ironic.drivers.modules import inspector
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import ssh
 
@@ -39,7 +39,7 @@ class BareonSwiftAndIPMIToolDriver(base.BaseDriver):
         self.deploy = bareon_swift.BareonSwiftDeploy()
         self.management = ipmitool.IPMIManagement()
         self.vendor = bareon_swift.BareonSwiftVendor()
-        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+        self.inspect = inspector.Inspector.create_if_enabled(
             'BareonSwiftAndIPMIToolDriver')
 
 
@@ -61,7 +61,7 @@ class BareonSwiftAndSSHDriver(base.BaseDriver):
         self.deploy = bareon_swift.BareonSwiftDeploy()
         self.management = ssh.SSHManagement()
         self.vendor = bareon_swift.BareonSwiftVendor()
-        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+        self.inspect = inspector.Inspector.create_if_enabled(
             'BareonSwiftAndSSHDriver')
 
 
@@ -82,7 +82,7 @@ class BareonRsyncAndIPMIToolDriver(base.BaseDriver):
         self.deploy = bareon_rsync.BareonRsyncDeploy()
         self.management = ipmitool.IPMIManagement()
         self.vendor = bareon_rsync.BareonRsyncVendor()
-        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+        self.inspect = inspector.Inspector.create_if_enabled(
             'BareonRsyncAndIPMIToolDriver')
 
 
@@ -104,5 +104,5 @@ class BareonRsyncAndSSHDriver(base.BaseDriver):
         self.deploy = bareon_rsync.BareonRsyncDeploy()
         self.management = ssh.SSHManagement()
         self.vendor = bareon_rsync.BareonRsyncVendor()
-        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+        self.inspect = inspector.Inspector.create_if_enabled(
             'BareonRsyncAndSSHDriver')
