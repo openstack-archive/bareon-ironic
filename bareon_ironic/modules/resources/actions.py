@@ -23,9 +23,9 @@ import tempfile
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log
 
 from ironic.common import exception
-from ironic.openstack.common import log
 
 from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules.resources import resources
