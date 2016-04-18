@@ -1,0 +1,11 @@
+Code-Review+2: Max Lobur <max_lobur@outlook.com>
+Verified+1: Max Lobur <max_lobur@outlook.com>
+Code-Review+2: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Verified+1: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Workflow+1: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 18 Apr 2016 13:39:10 +0000
+Reviewed-on: https://review.openstack.org/286550
+Project: openstack/bareon-ironic
+Branch: refs/heads/master
