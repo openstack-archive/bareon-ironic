@@ -31,6 +31,8 @@ from oslo_utils import fileutils
 from oslo_log import log
 from oslo_service import loopingcall
 
+from ironic_lib import utils as ironic_utils
+
 from ironic.common import boot_devices
 from ironic.common import dhcp_factory
 from ironic.common import exception
@@ -267,7 +269,7 @@ class BareonDeploy(base.DeployInterface):
         pxe_info = self._get_tftp_image_info(task.node)
         for label in pxe_info:
             path = pxe_info[label][1]
-            utils.unlink_without_raise(path)
+            ironic_utils.unlink_without_raise(path)
         AgentTFTPImageCache().clean_up()
         pxe_utils.clean_up_pxe_config(task)
 
