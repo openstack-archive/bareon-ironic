@@ -1,8 +1,8 @@
 diff --git a/ironic/api/controllers/v1/node.py b/ironic/api/controllers/v1/node.py
-index d95298f..1b99c68 100644
+index 30d52e8..0c66cb0 100644
 --- a/ironic/api/controllers/v1/node.py
 +++ b/ironic/api/controllers/v1/node.py
-@@ -452,8 +452,13 @@ class NodeStatesController(rest.RestController):
+@@ -472,8 +472,13 @@ class NodeStatesController(rest.RestController):
              raise exception.NodeInMaintenance(op=_('provisioning'),
                                                node=rpc_node.uuid)
  
@@ -16,7 +16,7 @@ index d95298f..1b99c68 100644
          if not m.is_actionable_event(ir_states.VERBS.get(target, target)):
              # Normally, we let the task manager recognize and deal with
              # NodeLocked exceptions. However, that isn't done until the RPC
-@@ -470,6 +475,16 @@ class NodeStatesController(rest.RestController):
+@@ -490,6 +495,16 @@ class NodeStatesController(rest.RestController):
                  action=target, node=rpc_node.uuid,
                  state=rpc_node.provision_state)
  
@@ -34,7 +34,7 @@ index d95298f..1b99c68 100644
              msg = (_('Adding a config drive is only supported when setting '
                       'provision state to %s') % ir_states.ACTIVE)
 diff --git a/ironic/api/controllers/v1/utils.py b/ironic/api/controllers/v1/utils.py
-index 538ca45..3715d41 100644
+index 5a7f474..3f39f3f 100644
 --- a/ironic/api/controllers/v1/utils.py
 +++ b/ironic/api/controllers/v1/utils.py
 @@ -23,6 +23,7 @@ from webob.static import FileIter
@@ -45,7 +45,7 @@ index 538ca45..3715d41 100644
  from ironic.common import exception
  from ironic.common.i18n import _
  from ironic.common import states
-@@ -109,7 +110,16 @@ def is_valid_node_name(name):
+@@ -122,7 +123,16 @@ def is_valid_node_name(name):
      :param: name: the node name to check.
      :returns: True if the name is valid, False otherwise.
      """
@@ -74,11 +74,11 @@ index ccd2222..b8186c9 100644
 -        values.pop('tenant', None)
          return cls(**values)
 diff --git a/ironic/common/images.py b/ironic/common/images.py
-index 5b00e65..28e6bd7 100644
+index 682a1a7..6685248 100644
 --- a/ironic/common/images.py
 +++ b/ironic/common/images.py
-@@ -328,16 +328,17 @@ def convert_image(source, dest, out_format, run_as_root=False):
-     utils.execute(*cmd, run_as_root=run_as_root)
+@@ -314,16 +314,17 @@ def create_isolinux_image_for_uefi(output_file, deploy_iso, kernel, ramdisk,
+             raise exception.ImageCreationFailed(image_type='iso', error=e)
  
  
 -def fetch(context, image_href, path, force_raw=False):
@@ -102,10 +102,10 @@ index 5b00e65..28e6bd7 100644
      with fileutils.remove_path_on_error(path):
          with open(path, "wb") as image_file:
 diff --git a/ironic/common/states.py b/ironic/common/states.py
-index e61c807..2523a7f 100644
+index 09c4aff..0e87cfd 100644
 --- a/ironic/common/states.py
 +++ b/ironic/common/states.py
-@@ -245,6 +245,9 @@ machine.add_state(INSPECTFAIL, target=MANAGEABLE, **watchers)
+@@ -246,6 +246,9 @@ machine.add_state(INSPECTFAIL, target=MANAGEABLE, **watchers)
  # A deployment may fail
  machine.add_transition(DEPLOYING, DEPLOYFAIL, 'fail')
  
@@ -116,7 +116,7 @@ index e61c807..2523a7f 100644
  # ironic/conductor/manager.py:do_node_deploy()
  machine.add_transition(DEPLOYFAIL, DEPLOYING, 'rebuild')
 diff --git a/ironic/common/swift.py b/ironic/common/swift.py
-index 8fa2d65..14d6b55 100644
+index b5c66c6..067d491 100644
 --- a/ironic/common/swift.py
 +++ b/ironic/common/swift.py
 @@ -24,6 +24,7 @@ from swiftclient import utils as swift_utils
@@ -141,41 +141,43 @@ index 8fa2d65..14d6b55 100644
  CONF.import_opt('admin_user', 'keystonemiddleware.auth_token',
                  group='keystone_authtoken')
  CONF.import_opt('admin_tenant_name', 'keystonemiddleware.auth_token',
-@@ -62,7 +70,9 @@ class SwiftAPI(object):
-                  tenant_name=CONF.keystone_authtoken.admin_tenant_name,
-                  key=CONF.keystone_authtoken.admin_password,
-                  auth_url=CONF.keystone_authtoken.auth_uri,
--                 auth_version=CONF.keystone_authtoken.auth_version):
-+                 auth_version=CONF.keystone_authtoken.auth_version,
+@@ -63,7 +71,9 @@ class SwiftAPI(object):
+                  key=None,
+                  auth_url=None,
+                  auth_version=None,
+-                 region_name=None):
++                 region_name=None,
 +                 preauthtoken=None,
 +                 preauthtenant=None):
          """Constructor for creating a SwiftAPI object.
  
          :param user: the name of the user for Swift account
-@@ -70,16 +80,41 @@ class SwiftAPI(object):
-         :param key: the 'password' or key to authenticate with
+@@ -72,6 +82,11 @@ class SwiftAPI(object):
          :param auth_url: the url for authentication
          :param auth_version: the version of api to use for authentication
+         :param region_name: the region used for getting endpoints of swift
 +        :param preauthtoken: authentication token (if you have already
 +                     authenticated) note authurl/user/key/tenant_name
 +                     are not required when specifying preauthtoken
 +        :param preauthtenant a tenant that will be accessed using the
 +                     preauthtoken
          """
--        auth_url = keystone.get_keystone_url(auth_url, auth_version)
--        params = {'retries': CONF.swift.swift_max_retries,
--                  'insecure': CONF.keystone_authtoken.insecure,
+         user = user or CONF.keystone_authtoken.admin_user
+         tenant_name = tenant_name or CONF.keystone_authtoken.admin_tenant_name
+@@ -79,14 +94,34 @@ class SwiftAPI(object):
+         auth_url = auth_url or CONF.keystone_authtoken.auth_uri
+         auth_version = auth_version or CONF.keystone_authtoken.auth_version
+         auth_url = keystone.get_keystone_url(auth_url, auth_version)
++
+         params = {'retries': CONF.swift.swift_max_retries,
+                   'insecure': CONF.keystone_authtoken.insecure,
 -                  'cacert': CONF.keystone_authtoken.cafile,
 -                  'user': user,
 -                  'tenant_name': tenant_name,
 -                  'key': key,
 -                  'authurl': auth_url,
 -                  'auth_version': auth_version}
-+        params = {
-+            'retries': CONF.swift.swift_max_retries,
-+            'insecure': CONF.keystone_authtoken.insecure,
-+            'cacert': CONF.keystone_authtoken.cafile
-+        }
++                  'cacert': CONF.keystone_authtoken.cafile}
 +
 +        if preauthtoken:
 +            # Determining swift url for the user's tenant account.
@@ -192,7 +194,6 @@ index 8fa2d65..14d6b55 100644
 +                'preauthurl': url
 +            })
 +        else:
-+            auth_url = keystone.get_keystone_url(auth_url, auth_version)
 +            params.update({
 +                'user': user,
 +                'tenant_name': tenant_name,
@@ -200,10 +201,11 @@ index 8fa2d65..14d6b55 100644
 +                'authurl': auth_url,
 +                'auth_version': auth_version
 +            })
- 
-         self.connection = swift_client.Connection(**params)
- 
-@@ -131,8 +166,8 @@ class SwiftAPI(object):
++
+         region_name = region_name or CONF.keystone_authtoken.region_name
+         if region_name:
+             params['os_options'] = {'region_name': region_name}
+@@ -141,8 +176,8 @@ class SwiftAPI(object):
              operation = _("head account")
              raise exception.SwiftOperationError(operation=operation,
                                                  error=e)
@@ -214,7 +216,7 @@ index 8fa2d65..14d6b55 100644
          parse_result = parse.urlparse(storage_url)
          swift_object_path = '/'.join((parse_result.path, container, object))
          temp_url_key = account_info['x-account-meta-temp-url-key']
-@@ -189,3 +224,23 @@ class SwiftAPI(object):
+@@ -205,3 +240,23 @@ class SwiftAPI(object):
          except swift_exceptions.ClientException as e:
              operation = _("post object")
              raise exception.SwiftOperationError(operation=operation, error=e)
@@ -239,10 +241,10 @@ index 8fa2d65..14d6b55 100644
 +            operation = _("get object")
 +            raise exception.SwiftOperationError(operation=operation, error=e)
 diff --git a/ironic/common/utils.py b/ironic/common/utils.py
-index f863087..ed4398f 100644
+index 9652a1b..7d17dcc 100644
 --- a/ironic/common/utils.py
 +++ b/ironic/common/utils.py
-@@ -42,6 +42,7 @@ from ironic.common import exception
+@@ -41,6 +41,7 @@ from ironic.common import exception
  from ironic.common.i18n import _
  from ironic.common.i18n import _LE
  from ironic.common.i18n import _LW
@@ -250,8 +252,8 @@ index f863087..ed4398f 100644
  
  utils_opts = [
      cfg.StrOpt('rootwrap_config',
-@@ -560,6 +561,11 @@ def is_http_url(url):
-     return url.startswith('http://') or url.startswith('https://')
+@@ -560,6 +561,11 @@ def umount(loc, *args):
+     execute(*args, run_as_root=True, check_exit_code=[0])
  
  
 +def get_tenant_id(tenant_name):
@@ -263,10 +265,10 @@ index f863087..ed4398f 100644
      """Check a directory is usable.
  
 diff --git a/ironic/conductor/manager.py b/ironic/conductor/manager.py
-index b4bee31..e5bb190 100644
+index 7e5679f..f419877 100644
 --- a/ironic/conductor/manager.py
 +++ b/ironic/conductor/manager.py
-@@ -768,6 +768,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
+@@ -588,6 +588,11 @@ class ConductorManager(base_manager.BaseConductorManager):
          """
          LOG.debug("RPC do_node_tear_down called for node %s." % node_id)
  
@@ -274,14 +276,15 @@ index b4bee31..e5bb190 100644
 +            if (task.node.provision_state == states.DEPLOYING and
 +                    task.driver.deploy.can_terminate_deployment):
 +                task.driver.deploy.terminate_deployment(task)
++
          with task_manager.acquire(context, node_id, shared=False,
                                    purpose='node tear down') as task:
              try:
 diff --git a/ironic/drivers/base.py b/ironic/drivers/base.py
-index 098b7a0..6ebe05d 100644
+index 02c3a75..15a2ce2 100644
 --- a/ironic/drivers/base.py
 +++ b/ironic/drivers/base.py
-@@ -345,6 +345,13 @@ class DeployInterface(BaseInterface):
+@@ -376,6 +376,13 @@ class DeployInterface(BaseInterface):
          """
          pass
  
@@ -296,7 +299,7 @@ index 098b7a0..6ebe05d 100644
  @six.add_metaclass(abc.ABCMeta)
  class BootInterface(object):
 diff --git a/ironic/drivers/modules/image_cache.py b/ironic/drivers/modules/image_cache.py
-index 8bb1e23..8e1a921 100644
+index 1835425..7c45ef3 100644
 --- a/ironic/drivers/modules/image_cache.py
 +++ b/ironic/drivers/modules/image_cache.py
 @@ -27,6 +27,7 @@ from oslo_concurrency import lockutils
@@ -317,7 +320,7 @@ index 8bb1e23..8e1a921 100644
          """Constructor.
  
          :param master_dir: cache directory to work on
-@@ -70,6 +72,7 @@ class ImageCache(object):
+@@ -71,6 +73,7 @@ class ImageCache(object):
          self.master_dir = master_dir
          self._cache_size = cache_size
          self._cache_ttl = cache_ttl
@@ -325,7 +328,7 @@ index 8bb1e23..8e1a921 100644
          if master_dir is not None:
              fileutils.ensure_tree(master_dir)
  
-@@ -94,23 +97,28 @@ class ImageCache(object):
+@@ -95,23 +98,28 @@ class ImageCache(object):
              # NOTE(ghe): We don't share images between instances/hosts
              if not CONF.parallel_image_downloads:
                  with lockutils.lock(img_download_lock_name, 'ironic-'):
@@ -362,7 +365,7 @@ index 8bb1e23..8e1a921 100644
          master_path = os.path.join(self.master_dir, master_file_name)
  
          if CONF.parallel_image_downloads:
-@@ -121,8 +129,8 @@ class ImageCache(object):
+@@ -122,8 +130,8 @@ class ImageCache(object):
              # NOTE(vdrok): After rebuild requested image can change, so we
              # should ensure that dest_path and master_path (if exists) are
              # pointing to the same file and their content is up to date
@@ -373,7 +376,7 @@ index 8bb1e23..8e1a921 100644
              dest_up_to_date = _delete_dest_path_if_stale(master_path,
                                                           dest_path)
  
-@@ -168,7 +176,8 @@ class ImageCache(object):
+@@ -169,7 +177,8 @@ class ImageCache(object):
          tmp_path = os.path.join(tmp_dir, href.split('/')[-1])
  
          try:
@@ -383,7 +386,7 @@ index 8bb1e23..8e1a921 100644
              # NOTE(dtantsur): no need for global lock here - master_path
              # will have link count >1 at any moment, so won't be cleaned up
              os.link(tmp_path, master_path)
-@@ -308,10 +317,11 @@ def _free_disk_space_for(path):
+@@ -310,10 +319,11 @@ def _free_disk_space_for(path):
      return stat.f_frsize * stat.f_bavail
  
  
@@ -397,7 +400,7 @@ index 8bb1e23..8e1a921 100644
      # Notes(yjiang5): If glance can provide the virtual size information,
      # then we can firstly clean cache and then invoke images.fetch().
      if force_raw:
-@@ -384,7 +394,7 @@ def cleanup(priority):
+@@ -386,7 +396,7 @@ def cleanup(priority):
      return _add_property_to_class_func
  
  
@@ -406,7 +409,7 @@ index 8bb1e23..8e1a921 100644
      """Delete image from cache if it is not up to date with href contents.
  
      :param master_path: path to an image in master cache
-@@ -397,7 +407,8 @@ def _delete_master_path_if_stale(master_path, href, ctx):
+@@ -399,7 +409,8 @@ def _delete_master_path_if_stale(master_path, href, ctx):
          # Glance image contents cannot be updated without changing image's UUID
          return os.path.exists(master_path)
      if os.path.exists(master_path):
@@ -416,11 +419,28 @@ index 8bb1e23..8e1a921 100644
          img_mtime = img_service.show(href).get('updated_at')
          if not img_mtime:
              # This means that href is not a glance image and doesn't have an
-diff --git a/ironic/tests/common/test_swift.py b/ironic/tests/common/test_swift.py
-index 43e3ef0..b2632c4 100644
---- a/ironic/tests/common/test_swift.py
-+++ b/ironic/tests/common/test_swift.py
-@@ -120,6 +120,7 @@ class SwiftTestCase(base.TestCase):
+diff --git a/ironic/tests/unit/common/test_rpc.py b/ironic/tests/unit/common/test_rpc.py
+index 6e10aac..5a8f316 100644
+--- a/ironic/tests/unit/common/test_rpc.py
++++ b/ironic/tests/unit/common/test_rpc.py
+@@ -65,10 +65,8 @@ class TestRequestContextSerializer(base.TestCase):
+ 
+     def test_deserialize_context(self):
+         self.context.user = 'fake-user'
+-        self.context.tenant = 'fake-tenant'
+         serialize_values = self.context.to_dict()
+         new_context = self.serializer.deserialize_context(serialize_values)
+-        # Ironic RequestContext from_dict will pop 'user' and 'tenant' and
+-        # initialize to None.
++        # Ironic RequestContext from_dict will pop 'user' and initialize
++        # to None.
+         self.assertIsNone(new_context.user)
+-        self.assertIsNone(new_context.tenant)
+diff --git a/ironic/tests/unit/common/test_swift.py b/ironic/tests/unit/common/test_swift.py
+index f696145..eb91895 100644
+--- a/ironic/tests/unit/common/test_swift.py
++++ b/ironic/tests/unit/common/test_swift.py
+@@ -127,6 +127,7 @@ class SwiftTestCase(base.TestCase):
          connection_obj_mock.get_auth.return_value = auth
          head_ret_val = {'x-account-meta-temp-url-key': 'secretkey'}
          connection_obj_mock.head_account.return_value = head_ret_val
@@ -428,10 +448,10 @@ index 43e3ef0..b2632c4 100644
          gen_temp_url_mock.return_value = 'temp-url-path'
          temp_url_returned = swiftapi.get_temp_url('container', 'object', 10)
          connection_obj_mock.get_auth.assert_called_once_with()
-diff --git a/ironic/tests/drivers/test_image_cache.py b/ironic/tests/drivers/test_image_cache.py
-index 3d666cd..436aa49 100644
---- a/ironic/tests/drivers/test_image_cache.py
-+++ b/ironic/tests/drivers/test_image_cache.py
+diff --git a/ironic/tests/unit/drivers/modules/test_image_cache.py b/ironic/tests/unit/drivers/modules/test_image_cache.py
+index 1224f52..ed9d83c 100644
+--- a/ironic/tests/unit/drivers/modules/test_image_cache.py
++++ b/ironic/tests/unit/drivers/modules/test_image_cache.py
 @@ -59,7 +59,7 @@ class TestImageCacheFetch(base.TestCase):
          self.cache.fetch_image(self.uuid, self.dest_path)
          self.assertFalse(mock_download.called)
@@ -486,7 +506,7 @@ index 3d666cd..436aa49 100644
              self.assertEqual(self.uuid, uuid)
              self.assertNotEqual(self.dest_path, tmp_path)
              self.assertNotEqual(os.path.dirname(tmp_path), self.master_dir)
-@@ -430,7 +430,7 @@ class TestImageCacheCleanUp(base.TestCase):
+@@ -446,7 +446,7 @@ class TestImageCacheCleanUp(base.TestCase):
      @mock.patch.object(utils, 'rmtree_without_raise', autospec=True)
      @mock.patch.object(image_cache, '_fetch', autospec=True)
      def test_temp_images_not_cleaned(self, mock_fetch, mock_rmtree):
@@ -495,7 +515,7 @@ index 3d666cd..436aa49 100644
              with open(tmp_path, 'w') as fp:
                  fp.write("TEST" * 10)
  
-@@ -675,7 +675,8 @@ class TestFetchCleanup(base.TestCase):
+@@ -691,7 +691,8 @@ class TestFetchCleanup(base.TestCase):
          mock_size.return_value = 100
          image_cache._fetch('fake', 'fake-uuid', '/foo/bar', force_raw=True)
          mock_fetch.assert_called_once_with('fake', 'fake-uuid',
@@ -505,4 +525,3 @@ index 3d666cd..436aa49 100644
          mock_clean.assert_called_once_with('/foo', 100)
          mock_raw.assert_called_once_with('fake-uuid', '/foo/bar',
                                           '/foo/bar.part')
-

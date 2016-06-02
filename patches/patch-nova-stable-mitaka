@@ -1,41 +1,41 @@
 diff --git a/nova/objects/image_meta.py b/nova/objects/image_meta.py
-index 15be3f1..83fc2fb 100644
+index 72a16dc..1003c14 100644
 --- a/nova/objects/image_meta.py
 +++ b/nova/objects/image_meta.py
-@@ -346,6 +346,7 @@ class ImageMetaProps(base.NovaObject):
+@@ -414,6 +414,7 @@ class ImageMetaProps(base.NovaObject):
          # is a fairly generic type. For a detailed type consider os_distro
          # instead
          'os_type': fields.OSTypeField(),
 +        'deploy_config': fields.StringField(),
      }
-
+ 
      # The keys are the legacy property names and
 diff --git a/nova/tests/unit/objects/test_objects.py b/nova/tests/unit/objects/test_objects.py
-index 031555f..e0368b8 100644
+index 199e351..456c64e 100644
 --- a/nova/tests/unit/objects/test_objects.py
 +++ b/nova/tests/unit/objects/test_objects.py
-@@ -1180,7 +1180,7 @@ object_data = {
-     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
-     'HVSpec': '1.1-6b4f7c0f688cbd03e24142a44eb9010d',
-     'ImageMeta': '1.7-642d1b2eb3e880a367f37d72dd76162d',
--    'ImageMetaProps': '1.7-f12fc4cf3e25d616f69a66fb9d2a7aa6',
-+    'ImageMetaProps': '1.7-716042e9e80ea16890f475200940d6f9',
-     'Instance': '2.0-ff56804dce87d81d9a04834d4bd1e3d2',
-     # NOTE(danms): Reviewers: do not approve changes to the Instance1
-     # object schema. It is frozen for Liberty and will be removed in
+@@ -1126,7 +1126,7 @@ object_data = {
+     'HyperVLiveMigrateData': '1.0-0b868dd6228a09c3f3e47016dddf6a1c',
+     'HVSpec': '1.2-db672e73304da86139086d003f3977e7',
+     'ImageMeta': '1.8-642d1b2eb3e880a367f37d72dd76162d',
+-    'ImageMetaProps': '1.12-6a132dee47931447bf86c03c7006d96c',
++    'ImageMetaProps': '1.12-605af4f965158bd805edb60d77678e9f',
+     'Instance': '2.1-416fdd0dfc33dfa12ff2cfdd8cc32e17',
+     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
+     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
 diff --git a/nova/tests/unit/virt/ironic/test_driver.py b/nova/tests/unit/virt/ironic/test_driver.py
-index a8c653a..940497c 100644
+index e2a6902..8d8e47f 100644
 --- a/nova/tests/unit/virt/ironic/test_driver.py
 +++ b/nova/tests/unit/virt/ironic/test_driver.py
-@@ -799,6 +799,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -800,6 +800,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
          result = self.driver.macs_for_instance(instance)
          self.assertIsNone(result)
-
+ 
 +    @mock.patch.object(ironic_driver.IronicDriver, '_get_switch_boot_options')
      @mock.patch.object(objects.Instance, 'save')
      @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
      @mock.patch.object(FAKE_CLIENT, 'node')
-@@ -807,7 +808,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -808,7 +809,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
      @mock.patch.object(ironic_driver.IronicDriver, '_plug_vifs')
      @mock.patch.object(ironic_driver.IronicDriver, '_start_firewall')
      def _test_spawn(self, mock_sf, mock_pvifs, mock_adf, mock_wait_active,
@@ -44,18 +44,19 @@ index a8c653a..940497c 100644
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
-@@ -845,6 +846,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -846,6 +847,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
          fake_looping_call.start.assert_called_once_with(
              interval=CONF.ironic.api_retry_interval)
          fake_looping_call.wait.assert_called_once_with()
 +        mock_sb_options.assert_called_once_with(self.ctx, instance, node_uuid)
-
+ 
      @mock.patch.object(ironic_driver.IronicDriver, '_generate_configdrive')
      @mock.patch.object(configdrive, 'required_by')
-@@ -897,14 +899,62 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -898,13 +900,61 @@ class IronicDriverTestCase(test.NoDBTestCase):
              self.driver.spawn, self.ctx, instance, None, [], None)
-         mock_destroy.assert_called_once_with(self.ctx, instance, None)
-
+         self.assertEqual(0, mock_destroy.call_count)
+ 
+-    def _test_add_driver_fields(self, mock_update=None, mock_call=None):
 +    @mock.patch.object(FAKE_CLIENT, 'node')
 +    def test__get_switch_boot_options(self, mock_node):
 +        node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
@@ -96,21 +97,18 @@ index a8c653a..940497c 100644
 +
 +    @mock.patch.object(ironic_driver.IronicDriver,
 +                       "_get_deploy_config_options")
-     @mock.patch.object(FAKE_CLIENT.node, 'update')
--    def test__add_driver_fields_good(self, mock_update):
-+    def test__add_driver_fields_good(self, mock_update,
-+                                     mock_get_depl_conf_opts):
++    def _test_add_driver_fields(self, mock_get_depl_conf_opts,
++                                mock_update=None, mock_call=None):
          node = ironic_utils.get_test_node(driver='fake')
 -        instance = fake_instance.fake_instance_obj(self.ctx,
 -                                                   node=node.uuid)
--        image_meta = ironic_utils.get_test_image_meta_object()
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
 +            node=node.uuid,
 +            expected_attrs=('metadata',))
+         image_meta = ironic_utils.get_test_image_meta()
          flavor = ironic_utils.get_test_flavor()
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
 +        mock_get_depl_conf_opts.return_value = {'foo': 'bar123'}
 +        instance['metadata']['driver_actions'] = 'test_driver_actions'
 +
@@ -119,7 +117,7 @@ index a8c653a..940497c 100644
          expected_patch = [{'path': '/instance_info/image_source', 'op': 'add',
                             'value': image_meta.id},
                            {'path': '/instance_info/root_gb', 'op': 'add',
-@@ -920,21 +970,96 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -920,7 +970,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
                            {'path': '/instance_info/local_gb', 'op': 'add',
                             'value': str(node.properties.get('local_gb', 0))},
                            {'path': '/instance_uuid', 'op': 'add',
@@ -132,9 +130,10 @@ index a8c653a..940497c 100644
 +                           'op': 'add',
 +                           'value': 'test_driver_actions'},
 +                          ]
-         mock_update.assert_called_once_with(node.uuid, expected_patch)
-
-     @mock.patch.object(FAKE_CLIENT.node, 'update')
+ 
+         if mock_call is not None:
+             # assert call() is invoked with retry_on_conflict False to
+@@ -943,14 +1000,82 @@ class IronicDriverTestCase(test.NoDBTestCase):
      def test__add_driver_fields_fail(self, mock_update):
          mock_update.side_effect = ironic_exception.BadRequest()
          node = ironic_utils.get_test_node(driver='fake')
@@ -144,16 +143,16 @@ index a8c653a..940497c 100644
 +            self.ctx,
 +            node=node.uuid,
 +            expected_attrs=('metadata',))
-         image_meta = ironic_utils.get_test_image_meta_object()
+         image_meta = ironic_utils.get_test_image_meta()
          flavor = ironic_utils.get_test_flavor()
          self.assertRaises(exception.InstanceDeployFailure,
                            self.driver._add_driver_fields,
                            node, instance, image_meta, flavor)
-
+ 
 +    def test__get_deploy_config_options_all_present(self):
 +        node = ironic_utils.get_test_node(
 +            driver='fake', driver_info={'deploy_config': "node-conf"})
-+        image_meta = ironic_utils.get_test_image_meta_object(
++        image_meta = ironic_utils.get_test_image_meta(
 +            deploy_config="image-conf")
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx, node=node.uuid, expected_attrs=('metadata',),
@@ -178,7 +177,7 @@ index a8c653a..940497c 100644
 +                "image": "previous_image_conf",
 +            }}
 +        )
-+        image_meta = ironic_utils.get_test_image_meta_object(
++        image_meta = ironic_utils.get_test_image_meta(
 +            deploy_config="image-conf")
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx, node=node.uuid, expected_attrs=('metadata',))
@@ -193,7 +192,7 @@ index a8c653a..940497c 100644
 +
 +    def test__get_deploy_config_options_some_present(self):
 +        node = ironic_utils.get_test_node(driver='fake')
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx, node=node.uuid, expected_attrs=('metadata',),
 +            metadata={'deploy_config': "instance-conf"})
@@ -206,7 +205,7 @@ index a8c653a..940497c 100644
 +
 +    def test__get_deploy_config_options_none_present(self):
 +        node = ironic_utils.get_test_node(driver='fake')
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx, node=node.uuid, expected_attrs=('metadata',))
 +
@@ -216,23 +215,10 @@ index a8c653a..940497c 100644
 +        expected = {}
 +        self.assertEqual(expected, opts)
 +
-     @mock.patch.object(FAKE_CLIENT.node, 'update')
-     def test__cleanup_deploy_good_with_flavor(self, mock_update):
-         node = ironic_utils.get_test_node(driver='fake',
-@@ -983,8 +1108,10 @@ class IronicDriverTestCase(test.NoDBTestCase):
-         node = ironic_utils.get_test_node(driver='fake',
-                                           instance_uuid=self.instance_uuid)
-         flavor = ironic_utils.get_test_flavor(extra_specs={})
--        instance = fake_instance.fake_instance_obj(self.ctx,
--                                                   node=node.uuid)
-+        instance = fake_instance.fake_instance_obj(
-+            self.ctx,
-+            node=node.uuid,
-+            expected_attrs=('metadata',))
-         instance.flavor = flavor
-         self.assertRaises(exception.InstanceTerminationFailure,
-                           self.driver._cleanup_deploy,
-@@ -998,7 +1125,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+     @mock.patch.object(configdrive, 'required_by')
+     @mock.patch.object(FAKE_CLIENT, 'node')
+     def test_spawn_node_driver_validation_fail(self, mock_node,
+@@ -959,7 +1084,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor()
@@ -240,9 +226,9 @@ index a8c653a..940497c 100644
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx, node=node_uuid, expected_attrs=('metadata',))
          instance.flavor = flavor
-
+ 
          mock_node.validate.return_value = ironic_utils.get_test_validation(
-@@ -1023,7 +1151,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -985,7 +1111,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor()
@@ -252,7 +238,27 @@ index a8c653a..940497c 100644
          instance.flavor = flavor
          mock_node.get.return_value = node
          mock_node.validate.return_value = ironic_utils.get_test_validation()
-@@ -1053,7 +1182,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1018,7 +1145,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+         node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+         node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
+         flavor = ironic_utils.get_test_flavor()
+-        instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
++        instance = fake_instance.fake_instance_obj(
++            self.ctx, node=node_uuid, expected_attrs=('metadata',))
+         instance.flavor = flavor
+         mock_node.get.return_value = node
+         mock_node.validate.return_value = ironic_utils.get_test_validation()
+@@ -1034,8 +1162,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+         mock_node.get.assert_called_once_with(
+                 node_uuid, fields=ironic_driver._NODE_FIELDS)
+         mock_node.validate.assert_called_once_with(node_uuid)
+-        mock_cleanup_deploy.assert_called_with(self.ctx, node, instance, None,
+-                                               flavor=flavor)
++        mock_cleanup_deploy.assert_called_with(node, instance, None)
+ 
+     @mock.patch.object(configdrive, 'required_by')
+     @mock.patch.object(FAKE_CLIENT, 'node')
+@@ -1049,7 +1176,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor()
@@ -261,8 +267,8 @@ index a8c653a..940497c 100644
 +            self.ctx, node=node_uuid, expected_attrs=('metadata',))
          instance.flavor = flavor
          image_meta = ironic_utils.get_test_image_meta()
-
-@@ -1082,7 +1212,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+ 
+@@ -1077,7 +1205,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor()
@@ -271,8 +277,8 @@ index a8c653a..940497c 100644
 +            self.ctx, node=node_uuid, expected_attrs=('metadata',))
          instance.flavor = flavor
          image_meta = ironic_utils.get_test_image_meta()
-
-@@ -1113,7 +1244,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+ 
+@@ -1107,7 +1236,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor()
@@ -281,8 +287,8 @@ index a8c653a..940497c 100644
 +            self.ctx, node=node_uuid, expected_attrs=('metadata',))
          instance.flavor = flavor
          image_meta = ironic_utils.get_test_image_meta()
-
-@@ -1146,7 +1278,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
+ 
+@@ -1139,7 +1269,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
          node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
          node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid)
          flavor = ironic_utils.get_test_flavor(ephemeral_gb=1)
@@ -292,10 +298,10 @@ index a8c653a..940497c 100644
          instance.flavor = flavor
          mock_node.get_by_instance_uuid.return_value = node
          mock_node.set_provision_state.return_value = mock.MagicMock()
-@@ -1541,15 +1674,16 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1529,15 +1660,16 @@ class IronicDriverTestCase(test.NoDBTestCase):
          self.driver.refresh_instance_security_rules(fake_group)
          mock_risr.assert_called_once_with(fake_group)
-
+ 
 +    @mock.patch.object(ironic_driver.IronicDriver, '_get_switch_boot_options')
      @mock.patch.object(ironic_driver.IronicDriver, '_wait_for_active')
      @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
@@ -311,10 +317,10 @@ index a8c653a..940497c 100644
          node_uuid = uuidutils.generate_uuid()
          node = ironic_utils.get_test_node(uuid=node_uuid,
                                            instance_uuid=self.instance_uuid,
-@@ -1560,10 +1694,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1548,10 +1680,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
          flavor_id = 5
          flavor = objects.Flavor(flavor_id=flavor_id, name='baremetal')
-
+ 
 -        instance = fake_instance.fake_instance_obj(self.ctx,
 -                                                   uuid=self.instance_uuid,
 -                                                   node=node_uuid,
@@ -326,18 +332,18 @@ index a8c653a..940497c 100644
 +            instance_type_id=flavor_id,
 +            expected_attrs=('metadata',))
          instance.flavor = flavor
-
+ 
          fake_looping_call = FakeLoopingCall()
-@@ -1589,6 +1725,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1575,6 +1709,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
          fake_looping_call.start.assert_called_once_with(
              interval=CONF.ironic.api_retry_interval)
          fake_looping_call.wait.assert_called_once_with()
 +        mock_sb_options.assert_called_once_with(self.ctx, instance, node_uuid)
-
+ 
      def test_rebuild_preserve_ephemeral(self):
          self._test_rebuild(preserve=True)
-@@ -1598,7 +1735,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
-
+@@ -1584,7 +1719,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
+ 
      @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
      @mock.patch.object(ironic_driver.IronicDriver, '_add_driver_fields')
 -    @mock.patch.object(FAKE_CLIENT.node, 'get')
@@ -345,10 +351,10 @@ index a8c653a..940497c 100644
      @mock.patch.object(objects.Instance, 'save')
      def test_rebuild_failures(self, mock_save, mock_get, mock_driver_fields,
                                mock_set_pstate):
-@@ -1612,10 +1749,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1598,10 +1733,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
          flavor_id = 5
          flavor = objects.Flavor(flavor_id=flavor_id, name='baremetal')
-
+ 
 -        instance = fake_instance.fake_instance_obj(self.ctx,
 -                                                   uuid=self.instance_uuid,
 -                                                   node=node_uuid,
@@ -360,12 +366,12 @@ index a8c653a..940497c 100644
 +            instance_type_id=flavor_id,
 +            expected_attrs=('metadata',))
          instance.flavor = flavor
-
+ 
          exceptions = [
-@@ -1631,6 +1770,316 @@ class IronicDriverTestCase(test.NoDBTestCase):
+@@ -1617,6 +1754,316 @@ class IronicDriverTestCase(test.NoDBTestCase):
                  injected_files=None, admin_password=None, bdms=None,
                  detach_block_devices=None, attach_block_devices=None)
-
+ 
 +    @mock.patch.object(ironic_driver.IronicDriver, '_do_rebuild')
 +    @mock.patch.object(ironic_driver.IronicDriver, '_get_switch_boot_options')
 +    @mock.patch.object(ironic_driver.IronicDriver, '_wait_for_active')
@@ -386,7 +392,7 @@ index a8c653a..940497c 100644
 +                                          instance_info={'multiboot': True})
 +        mock_get.return_value = node
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +
 +        flavor_id = 5
 +        flavor = objects.Flavor(flavor_id=flavor_id, name='baremetal')
@@ -437,7 +443,7 @@ index a8c653a..940497c 100644
 +                                          instance_info={'multiboot': True})
 +        mock_get.return_value = mock_get_by_instance.return_value = node
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        mock_image_meta_from_dict.return_value = image_meta
 +
 +        flavor_id = 5
@@ -469,7 +475,7 @@ index a8c653a..940497c 100644
 +                                          instance_type_id=5,
 +                                          instance_info={'multiboot': True})
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        flavor_id = 5
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
@@ -544,7 +550,7 @@ index a8c653a..940497c 100644
 +                           'image_source': 'original_image',
 +                           })
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        flavor_id = 5
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
@@ -582,7 +588,7 @@ index a8c653a..940497c 100644
 +                           'image_source': 'original_image',
 +                           })
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        flavor_id = 5
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
@@ -618,7 +624,7 @@ index a8c653a..940497c 100644
 +                           'image_source': 'original_image',
 +                           })
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        flavor_id = 5
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
@@ -655,7 +661,7 @@ index a8c653a..940497c 100644
 +                           'image_source': 'original_image',
 +                           })
 +
-+        image_meta = ironic_utils.get_test_image_meta_object()
++        image_meta = ironic_utils.get_test_image_meta()
 +        flavor_id = 5
 +        instance = fake_instance.fake_instance_obj(
 +            self.ctx,
@@ -676,11 +682,11 @@ index a8c653a..940497c 100644
 +                      instance.metadata['switch_boot_error'])
 +        mock_save.assert_called_once_with()
 +
-
- @mock.patch.object(instance_metadata, 'InstanceMetadata')
- @mock.patch.object(configdrive, 'ConfigDriveBuilder')
+     @mock.patch.object(FAKE_CLIENT.node, 'get')
+     def _test_network_binding_host_id(self, is_neutron, mock_get):
+         node_uuid = uuidutils.generate_uuid()
 diff --git a/nova/tests/unit/virt/ironic/utils.py b/nova/tests/unit/virt/ironic/utils.py
-index 0e67919..66eede3 100644
+index d25930e..3a37e2e 100644
 --- a/nova/tests/unit/virt/ironic/utils.py
 +++ b/nova/tests/unit/virt/ironic/utils.py
 @@ -39,7 +39,7 @@ def get_test_node(**kw):
@@ -692,34 +698,46 @@ index 0e67919..66eede3 100644
                  'driver': kw.get('driver', 'fake'),
                  'driver_info': kw.get('driver_info', {}),
                  'properties': kw.get('properties', {}),
-@@ -91,7 +91,11 @@ def get_test_flavor(**kw):
-
-
+@@ -92,8 +92,13 @@ def get_test_flavor(**kw):
+ 
+ 
  def get_test_image_meta(**kw):
--    return {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc')}
-+    return {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc'),
-+            'properties': {
-+                'deploy_config': kw.get('deploy_config', ''),
-+                'driver_actions': kw.get('driver_actions', ''),
-+            }}
-
-
- def get_test_image_meta_object(**kw):
-@@ -134,6 +138,9 @@ class FakeNodeClient(object):
+-    return objects.ImageMeta.from_dict(
+-        {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc')})
++    return objects.ImageMeta.from_dict({
++        'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc'),
++        'properties': {
++            'deploy_config': kw.get('deploy_config', ''),
++            'driver_actions': kw.get('driver_actions', '')
++        }
++    })
+ 
+ 
+ class FakePortClient(object):
+@@ -131,6 +136,9 @@ class FakeNodeClient(object):
      def validate(self, node_uuid):
          pass
-
+ 
 +    def vendor_passthru(self, node_uuid, method, args):
 +        pass
 +
-
+ 
  class FakeClient(object):
-
+ 
 diff --git a/nova/virt/ironic/driver.py b/nova/virt/ironic/driver.py
-index 194221e..062f3d7 100644
+index 9cbf4d7..6b5eed9 100644
 --- a/nova/virt/ironic/driver.py
 +++ b/nova/virt/ironic/driver.py
-@@ -391,6 +391,17 @@ class IronicDriver(virt_driver.ComputeDriver):
+@@ -76,7 +76,7 @@ _UNPROVISION_STATES = (ironic_states.ACTIVE, ironic_states.DEPLOYFAIL,
+ 
+ _NODE_FIELDS = ('uuid', 'power_state', 'target_power_state', 'provision_state',
+                 'target_provision_state', 'last_error', 'maintenance',
+-                'properties', 'instance_uuid')
++                'properties', 'instance_uuid', 'instance_info', 'driver_info')
+ 
+ 
+ def map_power_state(state):
+@@ -357,6 +357,17 @@ class IronicDriver(virt_driver.ComputeDriver):
          # Associate the node with an instance
          patch.append({'path': '/instance_uuid', 'op': 'add',
                        'value': instance.uuid})
@@ -735,23 +753,33 @@ index 194221e..062f3d7 100644
 +             'value': instance.metadata.get('driver_actions', '')})
 +
          try:
-             self.ironicclient.call('node.update', node.uuid, patch)
-         except ironic.exc.BadRequest:
-@@ -400,6 +411,12 @@ class IronicDriver(virt_driver.ComputeDriver):
+             # FIXME(lucasagomes): The "retry_on_conflict" parameter was added
+             # to basically causes the deployment to fail faster in case the
+@@ -371,6 +382,12 @@ class IronicDriver(virt_driver.ComputeDriver):
              LOG.error(msg)
              raise exception.InstanceDeployFailure(msg)
-
+ 
 +    def _update_driver_fields_after_switch_boot(self, context, node,
 +                                                instance, image_meta):
 +        patch = [{'path': '/instance_info/image_source', 'op': 'add',
-+                      'value': image_meta.id}]
++                  'value': image_meta.id}]
 +        self.ironicclient.call('node.update', node.uuid, patch)
 +
-     def _cleanup_deploy(self, context, node, instance, network_info,
-                         flavor=None):
-         if flavor is None:
-@@ -807,9 +824,19 @@ class IronicDriver(virt_driver.ComputeDriver):
-
+     def _cleanup_deploy(self, node, instance, network_info):
+         self._unplug_vifs(node, instance, network_info)
+         self._stop_firewall(instance, network_info)
+@@ -744,8 +761,7 @@ class IronicDriver(virt_driver.ComputeDriver):
+                     msg = (_LE("Failed to build configdrive: %s") %
+                            six.text_type(e))
+                     LOG.error(msg, instance=instance)
+-                    self._cleanup_deploy(context, node, instance, network_info,
+-                                         flavor=flavor)
++                    self._cleanup_deploy(node, instance, network_info)
+ 
+             LOG.info(_LI("Config drive for instance %(instance)s on "
+                          "baremetal node %(node)s created."),
+@@ -753,9 +769,19 @@ class IronicDriver(virt_driver.ComputeDriver):
+ 
          # trigger the node deploy
          try:
 -            self.ironicclient.call("node.set_provision_state", node_uuid,
@@ -773,10 +801,10 @@ index 194221e..062f3d7 100644
          except Exception as e:
              with excutils.save_and_reraise_exception():
                  msg = (_LE("Failed to request Ironic to provision instance "
-@@ -834,6 +861,17 @@ class IronicDriver(virt_driver.ComputeDriver):
+@@ -777,6 +803,17 @@ class IronicDriver(virt_driver.ComputeDriver):
+                               "baremetal node %(node)s."),
                               {'instance': instance.uuid,
                                'node': node_uuid})
-                 self.destroy(context, instance, network_info)
 +        else:
 +            self._get_switch_boot_options(context, instance, node_uuid)
 +
@@ -788,15 +816,15 @@ index 194221e..062f3d7 100644
 +            available_images = [img['image_name'] for img in
 +                                multiboot_meta.get('elements', [])]
 +            instance.metadata['available_images'] = str(available_images)
-
-     def _unprovision(self, ironicclient, instance, node):
+ 
+     def _unprovision(self, instance, node):
          """This method is called from destroy() to unprovision
-@@ -1188,16 +1226,102 @@ class IronicDriver(virt_driver.ComputeDriver):
+@@ -1113,16 +1150,102 @@ class IronicDriver(virt_driver.ComputeDriver):
          instance.task_state = task_states.REBUILD_SPAWNING
          instance.save(expected_task_state=[task_states.REBUILDING])
-
+ 
 -        node_uuid = instance.node
--        node = self.ironicclient.call("node.get", node_uuid)
+-        node = self._get_node(node_uuid)
 +        # NOTE(oberezovskyi): Required to get real node uuid assigned to nova
 +        # instance. Workaround after
 +        # Change-Id: I0233f964d8f294f0ffd9edcb16b1aaf93486177f
@@ -830,11 +858,11 @@ index 194221e..062f3d7 100644
 +                recreate=recreate,
 +                block_device_info=block_device_info,
 +                preserve_ephemeral=preserve_ephemeral)
-
+ 
 -        self._add_driver_fields(node, instance, image_meta, instance.flavor,
 -                                preserve_ephemeral)
 +        self._get_switch_boot_options(context, instance, node.uuid)
-
+ 
 -        # Trigger the node rebuild/redeploy.
 +    def _do_switch_boot_device(self, context, ironicclient, node, instance,
 +                               image_meta):
@@ -881,7 +909,7 @@ index 194221e..062f3d7 100644
 +        else:
 +            raise exception.InvalidMetadata(
 +                reason="To trigger switch boot device flow, both 'sb_user' "
-+                       "and 'sb_key' metadata params are required. To "s
++                       "and 'sb_key' metadata params are required. To "
 +                       "trigger a standard rebuild flow, use "
 +                       "force_rebuild=True metadata flag.")
 +
@@ -901,11 +929,10 @@ index 194221e..062f3d7 100644
          except (exception.NovaException,         # Retry failed
                  ironic.exc.InternalServerError,  # Validations
                  ironic.exc.BadRequest) as e:     # Maintenance
-@@ -1213,3 +1337,22 @@ class IronicDriver(virt_driver.ComputeDriver):
-                                                      instance)
+@@ -1138,6 +1261,25 @@ class IronicDriver(virt_driver.ComputeDriver):
          timer.start(interval=CONF.ironic.api_retry_interval).wait()
          LOG.info(_LI('Instance was successfully rebuilt'), instance=instance)
-+
+ 
 +    def _get_deploy_config_options(self, node, instance, image_meta):
 +        # Taking into account previous options, if any. This is to support
 +        # rebuild flow where the user might or might not pass deploy_config
@@ -924,3 +951,7 @@ index 194221e..062f3d7 100644
 +        # Override previous by current.
 +        res.update(curr_options)
 +        return res
++
+     def network_binding_host_id(self, context, instance):
+         """Get host ID to associate with network ports.
+ 
