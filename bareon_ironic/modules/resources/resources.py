@@ -23,6 +23,8 @@ from oslo_utils import fileutils
 from oslo_log import log
 from six.moves.urllib import parse
 
+from ironic_lib import utils as ironic_utils
+
 from ironic.common import exception
 from ironic.common import utils
 from ironic.common.i18n import _
@@ -135,7 +137,7 @@ def url_download_raw(context, node, url):
     resource_path = url_download(context, node, url)
     with open(resource_path) as f:
         raw = f.read()
-    utils.unlink_without_raise(resource_path)
+    ironic_utils.unlink_without_raise(resource_path)
     return raw
 
 
@@ -232,7 +234,7 @@ class Resource(bareon_utils.RawToPropertyMixin):
         """
         if not self.is_fetched():
             return
-        utils.unlink_without_raise(self.local_path)
+        ironic_utils.unlink_without_raise(self.local_path)
         self._raw.pop('local_path', None)
 
     @staticmethod
@@ -497,7 +499,7 @@ class PullMountResource(Resource):
             return
         bareon_utils.umount_without_raise(self.mount_point, '-fl')
         self._raw.pop('mount_point', None)
-        utils.unlink_without_raise(self.local_path)
+        ironic_utils.unlink_without_raise(self.local_path)
         self._raw.pop('local_path', None)
 
 
