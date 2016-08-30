@@ -208,7 +208,7 @@ def umount_without_raise(loc, *args):
     try:
         utils.umount(loc, *args)
     except processutils.ProcessExecutionError as e:
-        LOG.warn(_LW("umount_without_raise unable to umount dir %(path)s, "
+        LOG.warning(_LW("umount_without_raise unable to umount dir %(path)s, "
                      "error: %(e)s"), {'path': loc, 'e': e})
 
 
