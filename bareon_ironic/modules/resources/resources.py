@@ -436,7 +436,7 @@ class PullMountResource(Resource):
     """A resource with delayed upload
 
     A resource of this type is supposed to be a raw image. It is fetched
-    and mounted to the the rsync share. The rsync pointer is uploaded to
+    and mounted to the rsync share. The rsync pointer is uploaded to
     the node at target path. The user (or action) can use this pointer
     to download the resource from the node shell.
     """
