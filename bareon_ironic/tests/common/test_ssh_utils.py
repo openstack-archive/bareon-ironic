@@ -1,0 +1,137 @@
+#
+# Copyright 2016 Cray Inc., All Rights Reserved
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+import itertools
+import subprocess
+
+import mock
+
+from bareon_ironic import exception as exc
+from bareon_ironic.common import ssh_utils
+from bareon_ironic.tests import base
+from bareon_ironic.tests.common import test_subproc_utils
+
+
+class SSHPortForwardingTestCase(base.AbstractTestCase):
+    user = 'john-doe'
+    key_file = '/path/to/john-doe/auth/keys/host-key.rsa'
+    host = 'dummy.remote.local'
+    bind = ssh_utils.NetAddr('127.0.1.2', 4080)
+    forward = ssh_utils.NetAddr('127.3.4.5', 5080)
+
+    def setUp(self):
+        super(SSHPortForwardingTestCase, self).setUp()
+
+        # must be created before mocking
+        dummy_proc = test_subproc_utils.DummyPopen()
+        self.ssh_proc = mock.Mock(wraps=dummy_proc)
+
+        self.mock = {}
+        self.mock_patch = {
+            'subprocess.Popen': mock.patch(
+                'subprocess.Popen', return_value=self.ssh_proc),
+            'tempfile.TemporaryFile': mock.patch(
+                'tempfile.TemporaryFile', return_value=self.ssh_proc.stderr),
+            'time.time': mock.patch(
+                'time.time', side_effect=itertools.count()),
+            'time.sleep': mock.patch('time.sleep'),
+            'socket.socket': mock.patch('socket.socket')}
+
+        for name in self.mock_patch:
+            patch = self.mock_patch[name]
+            self.mock[name] = patch.start()
+            self.addCleanup(patch.stop)
+
+        self.local_forwarding = ssh_utils.SSHLocalPortForwarding(
+            self.user, self.key_file, self.host, self.bind, self.forward)
+        self.remote_forwarding = ssh_utils.SSHRemotePortForwarding(
+            self.user, self.key_file, self.host, self.bind, self.forward)
+
+    @mock.patch.object(
+        ssh_utils.SSHRemotePortForwarding, '_check_port_forwarding')
+    def test_remote_without_validation(self, validate_method):
+        self.remote_forwarding.validate_timeout = 0
+
+        forward_argument = self.bind + self.forward
+        forward_argument = [str(x) for x in forward_argument]
+        forward_argument = ':'.join(forward_argument)
+        user_host = '@'.join((self.user, self.host))
+
+        with self.remote_forwarding:
+            self.assertEqual(1, self.mock['subprocess.Popen'].call_count)
+            popen_args, popen_kwargs = self.mock['subprocess.Popen'].call_args
+            cmd = popen_args[0]
+            self.assertEqual(['ssh'], cmd[:1])
+            try:
+                actual_forward = cmd[cmd.index('-R') + 1]
+            except IndexError:
+                raise AssertionError(
+                    'Missing expected arguments -R <forward_spec> in SSH call')
+            self.assertEqual(forward_argument, actual_forward)
+
+            self.assertIn('-N', cmd)
+            self.assertEqual(user_host, cmd[-1])
+
+            self.assertIs(self.ssh_proc.stderr, popen_kwargs.get('stderr'))
+            self.assertEqual(0, self.ssh_proc.terminate.call_count)
+
+        self.assertEqual(0, validate_method.call_count)
+        self.assertEqual(1, self.ssh_proc.terminate.call_count)
+
+    @mock.patch('select.select')
+    def test_remote_validation(self, select_mock):
+        self.ssh_proc.stdout.write('CONNECT APPROVED\n')
+        self.ssh_proc.stdout.seek(0)
+
+        select_mock.return_value = [[self.ssh_proc.stdout.fileno()], [], []]
+        with self.remote_forwarding:
+            popen_args, popen_kwargs = self.mock['subprocess.Popen'].call_args
+            cmd = popen_args[0]
+
+            self.assertNotIn('-N', cmd)
+            self.assertEqual(['python'], cmd[-1:])
+
+            self.assertIs(subprocess.PIPE, popen_kwargs['stdout'])
+            self.assertIs(subprocess.PIPE, popen_kwargs['stdin'])
+
+            self.assertTrue(self.ssh_proc.stdin.closed)
+            self.assertEqual(0, self.ssh_proc.terminate.call_count)
+        self.assertEqual(1, self.ssh_proc.terminate.call_count)
+
+    @mock.patch('select.select')
+    def test_remote_validation_fail(self, select_mock):
+        ssh_output_indicator = 'SSH output grabbing indicator'
+
+        self.ssh_proc.stdout.write('output don\'t matching success marker\n')
+        self.ssh_proc.stdout.seek(0)
+        self.ssh_proc.stderr.write(ssh_output_indicator)
+
+        select_mock.side_effect = itertools.chain(
+            ([[self.ssh_proc.stdout.fileno()], [], []], ),
+            itertools.repeat([[], [], []]))
+        try:
+            with self.remote_forwarding:
+                pass
+        except exc.SSHSetupForwardingError as e:
+            self.assertIn(ssh_output_indicator, str(e))
+        except Exception as e:
+            raise AssertionError('Catch {!r} instead of {!r}'.format(
+                e, exc.SSHSetupForwardingError))
+        else:
+            raise AssertionError(
+                'There was no expected exception: {!r}'.format(
+                    exc.SSHSetupForwardingError))
+
+        self.assertEqual(1, self.ssh_proc.terminate.call_count)

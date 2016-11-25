@@ -19,6 +19,7 @@ Bareon Rsync deploy driver.
 
 from oslo_config import cfg
 
+from bareon_ironic.common import ssh_utils
 from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules import bareon_base
 from bareon_ironic.modules.resources import resources
@@ -60,8 +61,8 @@ class BareonRsyncVendor(bareon_base.BareonVendor):
             ssh_port = kwargs.get('bareon_ssh_port', 22)
             host = (kwargs.get('host') or
                     bareon_utils.get_node_ip(kwargs.get('task')))
-            with bareon_utils.ssh_tunnel(rsync.RSYNC_PORT, user,
-                                         key_file, host, ssh_port):
+            with ssh_utils.forward_remote_port(
+                    rsync.RSYNC_PORT, user, key_file, host, ssh_port):
                 return super(
                     BareonRsyncVendor, self
                 )._execute_deploy_script(task, ssh, cmd, **kwargs)

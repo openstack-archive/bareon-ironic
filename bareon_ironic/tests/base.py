@@ -13,9 +13,8 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import unittest
+import testtools
 
 
-class TestDummy(unittest.TestCase):
-    def test_dummy(self):
-        pass
+class AbstractTestCase(testtools.TestCase):
+    pass

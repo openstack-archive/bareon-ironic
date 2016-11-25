@@ -13,24 +13,21 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import contextlib
 import copy
 import hashlib
 import os
-import subprocess
 import tempfile
 
 import six
-from oslo_concurrency import processutils
-from oslo_config import cfg
-from oslo_log import log as logging
-from oslo_utils import strutils
-
 from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common import keystone
 from ironic.common import utils
 from ironic.common.i18n import _, _LW
+from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import strutils
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -93,34 +90,6 @@ def get_ssh_connection(task, **kwargs):
     LOG.debug(kwargs)
 
     return ssh
-
-
-@contextlib.contextmanager
-def ssh_tunnel(port, user, key_file, target_host, ssh_port=22):
-    tunnel = _create_ssh_tunnel(port, port, user, key_file, target_host,
-                                local_forwarding=False)
-    try:
-        yield
-    finally:
-        tunnel.terminate()
-
-
-def _create_ssh_tunnel(remote_port, local_port, user, key_file, target_host,
-                       remote_ip='127.0.0.1', local_ip='127.0.0.1',
-                       local_forwarding=True,
-                       ssh_port=22):
-    cmd = ['ssh', '-N', '-o', 'StrictHostKeyChecking=no', '-o',
-           'UserKnownHostsFile=/dev/null', '-p', str(ssh_port), '-i', key_file]
-    if local_forwarding:
-        cmd += ['-L', '{}:{}:{}:{}'.format(local_ip, local_port, remote_ip,
-                                           remote_port)]
-    else:
-        cmd += ['-R', '{}:{}:{}:{}'.format(remote_ip, remote_port, local_ip,
-                                           local_port)]
-
-    cmd.append('@'.join((user, target_host)))
-    # TODO(lobur): Make this sync, check status. (may use ssh control socket).
-    return subprocess.Popen(cmd)
 
 
 def sftp_write_to(sftp, data, path):
