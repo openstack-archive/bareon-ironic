@@ -170,8 +170,9 @@ class ActionController(bareon_utils.RawToPropertyMixin):
                 ssh_key_file = ssh_params.get('key_filename')
                 ssh_host = ssh_params.get('host')
                 ssh_port = ssh_params.get('port', 22)
-                with bareon_utils.ssh_tunnel(rsync.RSYNC_PORT, ssh_user,
-                                             ssh_key_file, ssh_host, ssh_port):
+                with bareon_utils.ssh_tunnel_for_remote_requests(
+                        rsync.RSYNC_PORT, ssh_user,
+                        ssh_key_file, ssh_host, ssh_port):
                     self._execute(ssh, sftp)
             else:
                 self._execute(ssh, sftp)
