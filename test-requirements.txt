@@ -5,5 +5,7 @@
 hacking<0.11,>=0.10.2 # Apache-2.0
 testrepository>=0.0.18 # Apache-2.0/BSD
 
+mock>=1.2  # BSD
+
 # this is required for the docs build jobs
 sphinx!=1.3b1,<1.4,>=1.2.1 # BSD
