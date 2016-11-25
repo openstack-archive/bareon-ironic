@@ -21,12 +21,12 @@ import datetime
 import os
 import tempfile
 
+from ironic.common import exception
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log
 
-from ironic.common import exception
-
+from bareon_ironic.common import ssh_utils
 from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules.resources import resources
 from bareon_ironic.modules.resources import rsync
@@ -170,8 +170,9 @@ class ActionController(bareon_utils.RawToPropertyMixin):
                 ssh_key_file = ssh_params.get('key_filename')
                 ssh_host = ssh_params.get('host')
                 ssh_port = ssh_params.get('port', 22)
-                with bareon_utils.ssh_tunnel(rsync.RSYNC_PORT, ssh_user,
-                                             ssh_key_file, ssh_host, ssh_port):
+                with ssh_utils.forward_remote_port(
+                        rsync.RSYNC_PORT, ssh_user,
+                        ssh_key_file, ssh_host, ssh_port):
                     self._execute(ssh, sftp)
             else:
                 self._execute(ssh, sftp)
