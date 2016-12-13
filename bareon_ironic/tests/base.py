@@ -13,8 +13,13 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import testtools
+from ironic.tests import base
+from ironic.tests.unit.db import base as db_base
 
 
-class AbstractTestCase(testtools.TestCase):
+class AbstractTestCase(base.TestCase):
+    pass
+
+
+class AbstractDBTestCase(db_base.DbTestCase):
     pass

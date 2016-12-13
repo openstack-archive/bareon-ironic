@@ -492,7 +492,19 @@ class BareonDeploy(base.DeployInterface):
         ]
         user_images = provision_config.get('images', default_user_images)
 
-        for image in user_images:
+        invalid_images = []
+        origin_names = [None] * len(user_images)
+        for idx, image in enumerate(user_images):
+            try:
+                bareon_utils.validate_json(('name', 'url'), image)
+            except exception.MissingParameterValue as e:
+                invalid_images.append(
+                    'Invalid "image" record - there is no key {key} (#{idx}: '
+                    '{payload})'.format(
+                        key=e, idx=idx, payload=json.dumps(image)))
+                continue
+
+            origin_names[idx] = image['name']
             image_uuid, image_name = image_service.get_glance_image_uuid_name(
                 task, image['url'])
             image['boot'] = (boot_image == image_uuid)
@@ -501,18 +513,25 @@ class BareonDeploy(base.DeployInterface):
             image['image_uuid'] = image_uuid
             image['image_name'] = image_name
 
+        if invalid_images:
+            raise exception.InvalidParameterValue(
+                err='\n'.join(invalid_images))
+
         fetched_image_resources = self._fetch_images(task, user_images)
 
         image_deployment_config = [
             {
-                'name': image.name,
+                # Grab name from source data to keep it untouched, because
+                # "resources" subsystem replace all not alphanumeric symbols
+                # to underscores in 'name' field.
+                'name': name,
                 'image_pull_url': image.pull_url,
                 'target': image.target,
                 'boot': image.boot,
                 'image_uuid': image.image_uuid,
                 'image_name': image.image_name
             }
-            for image in fetched_image_resources
+            for name, image in zip(origin_names, fetched_image_resources)
         ]
 
         bareon_utils.change_node_dict(
