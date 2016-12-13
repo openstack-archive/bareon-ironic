@@ -51,7 +51,7 @@ file as input.
 
 .. code-block:: console
 
-   root@example # glance image-create --is-public True --disk-format raw \
+   root@example # glance image-create --visibility public --disk-format raw \
    --container-format bare --name cloud_default_deploy_config \
    --file cloud_default_deploy_config
 
@@ -136,7 +136,7 @@ JSON deploy configuration file as input.
 
 .. code-block:: console
 
-   root@example # glance image-create --is-public True --disk-format raw \
+   root@example # glance image-create --visibility public --disk-format raw \
    --container-format bare --name deploy_config_example \
    --file deploy_config_example
 
@@ -580,7 +580,7 @@ To add your script to default resource storage (Glance), use the following comma
    ps aux | grep -i ssh
    dmesg | tail
 
-   root@example # glance image-create --is-public True --disk-format raw \
+   root@example # glance image-create --visibility public --disk-format raw \
    --container-format bare --name my_on_fail_script.sh \
    --file my_on_fail_script.sh
 
@@ -721,7 +721,7 @@ deploy configuration file as input.
 
 .. code-block:: console
 
-   root@example # glance image-create --is-public True --disk-format raw \
+   root@example # glance image-create --visibility public --disk-format raw \
    --container-format bare --name actions_list_example \
    --file actions_list_example
 
