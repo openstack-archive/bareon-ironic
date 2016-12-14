@@ -43,6 +43,9 @@
 # value)
 #check_terminate_max_retries=20
 
+# Fuel-agent data driver (string value)
+#agent_data_driver=ironic
+
 [resources]
 
 # A prefix that will be added when resource reference is not
