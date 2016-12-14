@@ -23,6 +23,8 @@ import json
 import os
 
 import eventlet
+import pkg_resources
+import stevedore
 import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
@@ -94,6 +96,9 @@ agent_opts = [
     cfg.IntOpt('check_terminate_max_retries',
                help='Max retries to check is node already terminated',
                default=20),
+    cfg.StrOpt('agent_data_driver',
+               default='ironic',
+               help='Fuel-agent data driver'),
 ]
 
 CONF = cfg.CONF
@@ -177,6 +182,10 @@ def _clean_up_images(task):
 class BareonDeploy(base.DeployInterface):
     """Interface for deploy-related actions."""
 
+    def __init__(self):
+        super(BareonDeploy, self).__init__()
+        self._deployment_config_validators = {}
+
     def get_properties(self):
         """Return the properties of the interface.
 
@@ -233,6 +242,7 @@ class BareonDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         """
         self._fetch_resources(task)
+        self._validate_deployment_config(task)
         self._prepare_pxe_boot(task)
 
     def clean_up(self, task):
@@ -299,6 +309,11 @@ class BareonDeploy(base.DeployInterface):
             task.node.uuid, filename))
         with open(filename, 'w') as f:
             f.write(json.dumps(config))
+
+    def _validate_deployment_config(self, task):
+        data_driver_name = bareon_utils.node_data_driver(task.node)
+        validator = self._get_deployment_config_validator(data_driver_name)
+        validator(get_provision_json_path(task.node))
 
     def _get_deploy_config(self, task):
         node = task.node
@@ -638,6 +653,14 @@ class BareonDeploy(base.DeployInterface):
     def can_terminate_deployment(self):
         return True
 
+    def _get_deployment_config_validator(self, driver_name):
+        try:
+            validator = self._deployment_config_validators[driver_name]
+        except KeyError:
+            validator = DeploymentConfigValidator(driver_name)
+            self._deployment_config_validators[driver_name] = validator
+        return validator
+
 
 class BareonVendor(base.VendorInterface):
     def get_properties(self):
@@ -697,8 +720,9 @@ class BareonVendor(base.VendorInterface):
         params = BareonDeploy._parse_driver_info(node)
         params['host'] = kwargs.get('address')
 
-        cmd = '%s --data_driver ironic --deploy_driver %s' % (
-            params.pop('script'), node.instance_info['deploy_driver'])
+        cmd = '{} --data_driver "{}" --deploy_driver "{}"'.format(
+            params.pop('script'), bareon_utils.node_data_driver(node),
+            node.instance_info['deploy_driver'])
         if CONF.debug:
             cmd += ' --debug'
         instance_info = node.instance_info
@@ -1050,6 +1074,56 @@ class BareonVendor(base.VendorInterface):
                 LOG.error(msg)
                 task.node.last_error = msg
                 task.node.save()
+
+
+class DeploymentConfigValidator(object):
+    _driver = None
+    _namespace = 'bareon.drivers.data'
+    _min_version = pkg_resources.parse_version('0.0.2')
+
+    def __init__(self, driver_name):
+        self.driver_name = driver_name
+
+        LOG.debug('Loading bareon data-driver "{}"', self.driver_name)
+        try:
+            manager = stevedore.driver.DriverManager(
+                self._namespace, self.driver_name, verify_requirements=True)
+            extension = manager[driver_name]
+            version = extension.entry_point.dist.version
+            version = pkg_resources.parse_version(version)
+            LOG.info('Driver %s-%s loaded', extension.name, version)
+
+            if version < self._min_version:
+                raise RuntimeError(
+                    'bareon version less than {} does not support '
+                    'deployment config validation'.format(self._min_version))
+        except RuntimeError as e:
+            LOG.warning(
+                'Fail to load fuel-agent data-driver "%s": %s',
+                self.driver_name, e)
+            return
+
+        self._driver = manager.driver
+
+    def __call__(self, deployment_config):
+        if self._driver is None:
+            LOG.info(
+                'Skipping deployment config validation due to problem in '
+                'loading bareon data driver')
+            return
+
+        try:
+            with open(deployment_config, 'rt') as stream:
+                payload = json.load(stream)
+            self._driver.validate_data(payload)
+        except (IOError, ValueError, TypeError) as e:
+            raise exception.InvalidParameterValue(
+                'Unable to load deployment config "{}": {}'.format(
+                    deployment_config, e))
+        except self._driver.exc.WrongInputDataError as e:
+            raise exception.InvalidParameterValue(
+                'Deployment config has failed validation.\n'
+                '{0.message}'.format(e))
 
 
 def get_provision_json_path(node):

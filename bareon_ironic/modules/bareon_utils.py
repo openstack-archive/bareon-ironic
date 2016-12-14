@@ -49,6 +49,14 @@ def change_node_dict(node, dict_name, new_data):
     setattr(node, dict_name, dict_data)
 
 
+def node_data_driver(node):
+    try:
+        driver = node.instance_info['data_driver']
+    except KeyError:
+        driver = CONF.fuel.agent_data_driver
+    return driver
+
+
 def str_to_alnum(s):
     if not s.isalnum():
         s = ''.join([c for c in s if c.isalnum()])
