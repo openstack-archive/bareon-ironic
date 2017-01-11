@@ -51,7 +51,7 @@ The ``bare_swift_ipmi`` driver used as example.
 
         $ KERNEL=<UUID_of_kernel_image_in_Glance>
         $ INITRD=<UUID_of_initrd_image_in_Glance>
-        $ PRIVATE_KEY_PATH=/tmp/rft_image_build/fuel_key
+        $ PRIVATE_KEY_PATH=/tmp/rft_image_build/bareon_key
         $ ironic node-update <node uuid> add driver_info/deploy_kernel=$KERNEL \
         driver_info/deploy_ramdisk=$INITRD \
         driver_info/bareon_key_filename=$PRIVATE_KEY_PATH

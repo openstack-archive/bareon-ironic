@@ -53,7 +53,7 @@ def node_data_driver(node):
     try:
         driver = node.instance_info['data_driver']
     except KeyError:
-        driver = CONF.fuel.agent_data_driver
+        driver = CONF.bareon.agent_data_driver
     return driver
 
 

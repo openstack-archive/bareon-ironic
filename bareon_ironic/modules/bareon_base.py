@@ -98,7 +98,7 @@ agent_opts = [
                default=20),
     cfg.StrOpt('agent_data_driver',
                default='ironic',
-               help='Fuel-agent data driver'),
+               help='Bareon data driver'),
 ]
 
 CONF = cfg.CONF
@@ -114,7 +114,7 @@ OTHER_PROPERTIES = {
                          'mounted at boot time.'),
     'bareon_username': _('SSH username; default is "root" Optional.'),
     'bareon_key_filename': _('Name of SSH private key file; default is '
-                             '"/etc/ironic/fuel_key". Optional.'),
+                             '"/etc/ironic/bareon_key". Optional.'),
     'bareon_ssh_port': _('SSH port; default is 22. Optional.'),
     'bareon_deploy_script': _('path to bareon executable entry point; '
                               'default is "provision_ironic" Optional.'),
@@ -588,7 +588,7 @@ class BareonDeploy(base.DeployInterface):
 
         d_info['username'] = info.get('bareon_username', 'root')
         d_info['key_filename'] = info.get('bareon_key_filename',
-                                          '/etc/ironic/fuel_key')
+                                          '/etc/ironic/bareon_key')
 
         if not os.path.isfile(d_info['key_filename']):
             error_msgs.append(_("SSH key file %s not found.") %
@@ -1099,7 +1099,7 @@ class DeploymentConfigValidator(object):
                     'deployment config validation'.format(self._min_version))
         except RuntimeError as e:
             LOG.warning(
-                'Fail to load fuel-agent data-driver "%s": %s',
+                'Fail to load bareon data-driver "%s": %s',
                 self.driver_name, e)
             return
 
