@@ -15,4 +15,4 @@
 
 import pbr.version
 
-version_info = pbr.version.VersionInfo('fuel-agent')
+version_info = pbr.version.VersionInfo('bareon')
