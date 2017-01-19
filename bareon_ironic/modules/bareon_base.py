@@ -243,7 +243,8 @@ class BareonDeploy(base.DeployInterface):
         """
         self._fetch_resources(task)
         self._validate_deployment_config(task)
-        self._prepare_pxe_boot(task)
+        import pdb; pdb.set_trace()
+        task.driver.boot.prepare_ramdisk(task, self._prepare_config(task))
 
     def clean_up(self, task):
         """Clean up the deployment environment for this node.
@@ -403,23 +404,9 @@ class BareonDeploy(base.DeployInterface):
         :param ports: a list of Neutron port dicts to update DHCP options on.
             If None, will get the list of ports from the Ironic port objects.
         """
-        dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory()
-        provider.update_dhcp(task, dhcp_opts, ports)
-        manager_utils.node_set_boot_device(task, boot_devices.PXE,
-                                           persistent=True)
         manager_utils.node_power_action(task, states.REBOOT)
 
-    def _cache_tftp_images(self, ctx, node, pxe_info):
-        """Fetch the necessary kernels and ramdisks for the instance."""
-        fileutils.ensure_tree(
-            os.path.join(CONF.pxe.tftp_root, node.uuid))
-        LOG.debug("Fetching kernel and ramdisk for node %s",
-                  node.uuid)
-        deploy_utils.fetch_images(ctx, AgentTFTPImageCache(),
-                                  pxe_info.values())
-
-    def _prepare_pxe_boot(self, task):
+    def _prepare_config(self, task):
         """Prepare the files required for PXE booting the agent."""
         pxe_info = self._get_tftp_image_info(task.node)
 
@@ -428,13 +415,7 @@ class BareonDeploy(base.DeployInterface):
                         CONF.bareon.deploy_squashfs)
         pxe_options = self._build_pxe_config_options(task, pxe_info,
                                                      is_live_boot)
-        template = (CONF.bareon.pxe_config_template_live if is_live_boot
-                    else CONF.bareon.pxe_config_template)
-        pxe_utils.create_pxe_config(task,
-                                    pxe_options,
-                                    template)
-
-        self._cache_tftp_images(task.context, task.node, pxe_info)
+        return pxe_options
 
     def _get_tftp_image_info(self, node):
         params = self._get_boot_files(node)
@@ -452,19 +433,14 @@ class BareonDeploy(base.DeployInterface):
         :returns: a dict containing the options to be applied on
         the agent pxe config template.
         """
-        ironic_api = (CONF.conductor.api_url or
-                      keystone.get_service_url()).rstrip('/')
 
         agent_config_opts = {
-            'deployment_aki_path': pxe_info['deploy_kernel'][1],
-            'deployment_ari_path': pxe_info['deploy_ramdisk'][1],
-            'bareon_pxe_append_params': CONF.bareon.bareon_pxe_append_params,
             'deployment_id': task.node.uuid,
-            'api-url': ironic_api,
+            'ironic_api_url': deploy_utils.get_ironic_api_url(),
         }
 
         if live_boot:
-            agent_config_opts['rootfs-url'] = _create_rootfs_link(task)
+            agent_config_opts['root_device'] = _create_rootfs_link(task)
 
         return agent_config_opts
 
