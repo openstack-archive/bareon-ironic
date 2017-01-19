@@ -17,30 +17,11 @@
 Bareon Rsync deploy driver.
 """
 
-from oslo_config import cfg
-
 from bareon_ironic.common import ssh_utils
 from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules import bareon_base
 from bareon_ironic.modules.resources import resources
 from bareon_ironic.modules.resources import rsync
-
-rsync_opts = [
-    cfg.StrOpt('rsync_master_path',
-               default='/rsync/master_images',
-               help='Directory where master rsync images are stored on disk.'),
-    cfg.IntOpt('image_cache_size',
-               default=20480,
-               help='Maximum size (in MiB) of cache for master images, '
-                    'including those in use.'),
-    cfg.IntOpt('image_cache_ttl',
-               default=10080,
-               help='Maximum TTL (in minutes) for old master images in '
-                    'cache.'),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(rsync_opts, group='rsync')
 
 
 class BareonRsyncDeploy(bareon_base.BareonDeploy):
