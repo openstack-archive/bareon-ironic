@@ -29,16 +29,13 @@ import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_utils import excutils
-from oslo_utils import fileutils
 from oslo_log import log
 from oslo_service import loopingcall
 
 from ironic_lib import utils as ironic_utils
 
 from ironic.common import boot_devices
-from ironic.common import dhcp_factory
 from ironic.common import exception
-from ironic.common import keystone
 from ironic.common import pxe_utils
 from ironic.common import states
 from ironic.common import utils
@@ -127,18 +124,6 @@ REQUIRED_BAREON_VERSION = "0.0."
 TERMINATE_FLAG = 'terminate_deployment'
 
 
-@image_cache.cleanup(priority=25)
-class AgentTFTPImageCache(image_cache.ImageCache):
-    def __init__(self, image_service=None):
-        super(AgentTFTPImageCache, self).__init__(
-            CONF.pxe.tftp_master_path,
-            # MiB -> B
-            CONF.pxe.image_cache_size * 1024 * 1024,
-            # min -> sec
-            CONF.pxe.image_cache_ttl * 60,
-            image_service=image_service)
-
-
 def _create_rootfs_link(task):
     """Create Swift temp url for deployment root FS."""
     rootfs = task.node.driver_info['deploy_squashfs']
@@ -159,24 +144,6 @@ def _create_rootfs_link(task):
                           "is not a valid HTTP URL or "
                           "is not reachable."), rootfs)
     return rootfs
-
-
-def _clean_up_images(task):
-    node = task.node
-    if node.instance_info.get('images_cleaned_up', False):
-        return
-    try:
-        with open(get_tenant_images_json_path(node)) as f:
-            images_json = json.loads(f.read())
-    except Exception as ex:
-        LOG.warning("Cannot find tenant_images.json for the %s node to"
-                    "finish cleanup." % node)
-        LOG.warning(str(ex))
-    else:
-        images = resources.ResourceList.from_dict(images_json, task)
-        images.cleanup_resources()
-        bareon_utils.change_node_dict(task.node, 'instance_info',
-                                      {'images_cleaned_up': True})
 
 
 class BareonDeploy(base.DeployInterface):
@@ -223,7 +190,7 @@ class BareonDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         :returns: status of the deploy. One of ironic.common.states.
         """
-        self._do_pxe_boot(task)
+        manager_utils.node_power_action(task, states.REBOOT)
         return states.DEPLOYWAIT
 
     @task_manager.require_exclusive_lock
@@ -243,7 +210,8 @@ class BareonDeploy(base.DeployInterface):
         """
         self._fetch_resources(task)
         self._validate_deployment_config(task)
-        self._prepare_pxe_boot(task)
+        task.driver.boot.prepare_ramdisk(task,
+                                         self._build_pxe_config_options(task))
 
     def clean_up(self, task):
         """Clean up the deployment environment for this node.
@@ -261,27 +229,10 @@ class BareonDeploy(base.DeployInterface):
 
         :param task: a TaskManager instance.
         """
-        # NOTE(lobur): most of the cleanup is done immediately after
-        # deployment (see end of pass_deploy_info).
-        # - PXE resources are left till the node is unprovisioned because we
-        # plan to add support of tenant PXE boot.
-        # - Resources such as provision.json are left till the node is
-        # unprovisioned to simplify debugging.
-        self._clean_up_pxe(task)
-        _clean_up_images(task)
-        self._clean_up_resource_dirs(task)
+        task.driver.boot.clean_up_ramdisk(task)
 
     def take_over(self, task):
         pass
-
-    def _clean_up_pxe(self, task):
-        """Clean up left over PXE and DHCP files."""
-        pxe_info = self._get_tftp_image_info(task.node)
-        for label in pxe_info:
-            path = pxe_info[label][1]
-            ironic_utils.unlink_without_raise(path)
-        AgentTFTPImageCache().clean_up()
-        pxe_utils.clean_up_pxe_config(task)
 
     def _fetch_resources(self, task):
         self._fetch_provision_json(task)
@@ -387,84 +338,24 @@ class BareonDeploy(base.DeployInterface):
         with open(filename, 'w') as f:
             f.write(json.dumps(actions_data))
 
-    def _clean_up_resource_dirs(self, task):
-        utils.rmtree_without_raise(
-            resources.get_abs_node_workdir_path(task.node))
-        utils.rmtree_without_raise(
-            rsync.get_abs_node_workdir_path(task.node))
-
     def _build_instance_info_for_deploy(self, task):
         raise NotImplementedError
 
-    def _do_pxe_boot(self, task, ports=None):
-        """Reboot the node into the PXE ramdisk.
-
-        :param task: a TaskManager instance
-        :param ports: a list of Neutron port dicts to update DHCP options on.
-            If None, will get the list of ports from the Ironic port objects.
-        """
-        dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory()
-        provider.update_dhcp(task, dhcp_opts, ports)
-        manager_utils.node_set_boot_device(task, boot_devices.PXE,
-                                           persistent=True)
-        manager_utils.node_power_action(task, states.REBOOT)
-
-    def _cache_tftp_images(self, ctx, node, pxe_info):
-        """Fetch the necessary kernels and ramdisks for the instance."""
-        fileutils.ensure_tree(
-            os.path.join(CONF.pxe.tftp_root, node.uuid))
-        LOG.debug("Fetching kernel and ramdisk for node %s",
-                  node.uuid)
-        deploy_utils.fetch_images(ctx, AgentTFTPImageCache(),
-                                  pxe_info.values())
-
-    def _prepare_pxe_boot(self, task):
-        """Prepare the files required for PXE booting the agent."""
-        pxe_info = self._get_tftp_image_info(task.node)
-
-        # Do live boot if squashfs is specified in either way.
-        is_live_boot = (task.node.driver_info.get('deploy_squashfs') or
-                        CONF.bareon.deploy_squashfs)
-        pxe_options = self._build_pxe_config_options(task, pxe_info,
-                                                     is_live_boot)
-        template = (CONF.bareon.pxe_config_template_live if is_live_boot
-                    else CONF.bareon.pxe_config_template)
-        pxe_utils.create_pxe_config(task,
-                                    pxe_options,
-                                    template)
-
-        self._cache_tftp_images(task.context, task.node, pxe_info)
-
-    def _get_tftp_image_info(self, node):
-        params = self._get_boot_files(node)
-        return pxe_utils.get_deploy_kr_info(node.uuid, params)
-
-    def _build_pxe_config_options(self, task, pxe_info, live_boot):
+    def _build_pxe_config_options(self, task):
         """Builds the pxe config options for booting agent.
 
         This method builds the config options to be replaced on
         the agent pxe config template.
 
         :param task: a TaskManager instance
-        :param pxe_info: A dict containing the 'deploy_kernel' and
-            'deploy_ramdisk' for the agent pxe config template.
         :returns: a dict containing the options to be applied on
         the agent pxe config template.
         """
-        ironic_api = (CONF.conductor.api_url or
-                      keystone.get_service_url()).rstrip('/')
 
         agent_config_opts = {
-            'deployment_aki_path': pxe_info['deploy_kernel'][1],
-            'deployment_ari_path': pxe_info['deploy_ramdisk'][1],
-            'bareon_pxe_append_params': CONF.bareon.bareon_pxe_append_params,
             'deployment_id': task.node.uuid,
-            'api-url': ironic_api,
+            'ironic_api_url': deploy_utils.get_ironic_api_url(),
         }
-
-        if live_boot:
-            agent_config_opts['rootfs-url'] = _create_rootfs_link(task)
 
         return agent_config_opts
 
