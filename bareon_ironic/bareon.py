@@ -16,6 +16,7 @@
 from ironic.drivers import base
 from ironic.drivers.modules import inspector
 from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules import pxe
 from ironic.drivers.modules import ssh
 
 from bareon_ironic.modules import bareon_rsync
@@ -37,6 +38,7 @@ class BareonSwiftAndIPMIToolDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipmitool.IPMIPower()
         self.deploy = bareon_swift.BareonSwiftDeploy()
+        self.boot = pxe.PXEBoot()
         self.management = ipmitool.IPMIManagement()
         self.vendor = bareon_swift.BareonSwiftVendor()
         self.inspect = inspector.Inspector.create_if_enabled(
@@ -59,6 +61,7 @@ class BareonSwiftAndSSHDriver(base.BaseDriver):
     def __init__(self):
         self.power = ssh.SSHPower()
         self.deploy = bareon_swift.BareonSwiftDeploy()
+        self.boot = pxe.PXEBoot()
         self.management = ssh.SSHManagement()
         self.vendor = bareon_swift.BareonSwiftVendor()
         self.inspect = inspector.Inspector.create_if_enabled(
@@ -80,6 +83,7 @@ class BareonRsyncAndIPMIToolDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipmitool.IPMIPower()
         self.deploy = bareon_rsync.BareonRsyncDeploy()
+        self.boot = pxe.PXEBoot()
         self.management = ipmitool.IPMIManagement()
         self.vendor = bareon_rsync.BareonRsyncVendor()
         self.inspect = inspector.Inspector.create_if_enabled(
@@ -102,6 +106,7 @@ class BareonRsyncAndSSHDriver(base.BaseDriver):
     def __init__(self):
         self.power = ssh.SSHPower()
         self.deploy = bareon_rsync.BareonRsyncDeploy()
+        self.boot = pxe.PXEBoot()
         self.management = ssh.SSHManagement()
         self.vendor = bareon_rsync.BareonRsyncVendor()
         self.inspect = inspector.Inspector.create_if_enabled(
