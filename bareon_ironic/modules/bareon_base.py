@@ -28,21 +28,12 @@ import stevedore
 import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
-from oslo_utils import excutils
-from oslo_utils import fileutils
 from oslo_log import log
 from oslo_service import loopingcall
 
-from ironic_lib import utils as ironic_utils
-
 from ironic.common import boot_devices
-from ironic.common import dhcp_factory
 from ironic.common import exception
-from ironic.common import keystone
-from ironic.common import pxe_utils
 from ironic.common import states
-from ironic.common import utils
-from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
@@ -50,7 +41,6 @@ from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
-from ironic.drivers.modules import image_cache
 from ironic.objects import node as db_node
 
 from bareon_ironic.modules import bareon_exception
@@ -58,7 +48,6 @@ from bareon_ironic.modules import bareon_utils
 from bareon_ironic.modules.resources import actions
 from bareon_ironic.modules.resources import image_service
 from bareon_ironic.modules.resources import resources
-from bareon_ironic.modules.resources import rsync
 
 agent_opts = [
     cfg.StrOpt('pxe_config_template',
@@ -117,7 +106,7 @@ OTHER_PROPERTIES = {
                              '"/etc/ironic/bareon_key". Optional.'),
     'bareon_ssh_port': _('SSH port; default is 22. Optional.'),
     'bareon_deploy_script': _('path to bareon executable entry point; '
-                              'default is "provision_ironic" Optional.'),
+                              'default is "bareon-provision" Optional.'),
     'deploy_config': _('Deploy config Glance image id/name'),
 }
 COMMON_PROPERTIES = OTHER_PROPERTIES
@@ -125,40 +114,6 @@ COMMON_PROPERTIES = OTHER_PROPERTIES
 REQUIRED_BAREON_VERSION = "0.0."
 
 TERMINATE_FLAG = 'terminate_deployment'
-
-
-@image_cache.cleanup(priority=25)
-class AgentTFTPImageCache(image_cache.ImageCache):
-    def __init__(self, image_service=None):
-        super(AgentTFTPImageCache, self).__init__(
-            CONF.pxe.tftp_master_path,
-            # MiB -> B
-            CONF.pxe.image_cache_size * 1024 * 1024,
-            # min -> sec
-            CONF.pxe.image_cache_ttl * 60,
-            image_service=image_service)
-
-
-def _create_rootfs_link(task):
-    """Create Swift temp url for deployment root FS."""
-    rootfs = task.node.driver_info['deploy_squashfs']
-    if service_utils.is_glance_image(rootfs):
-        glance = image_service.GlanceImageService(version=2,
-                                                  context=task.context)
-        image_info = glance.show(rootfs)
-        temp_url = glance.swift_temp_url(image_info)
-        temp_url += '&filename=/root.squashfs'
-        return temp_url
-
-    try:
-        image_service.HttpImageService().validate_href(rootfs)
-    except exception.ImageRefValidationFailed:
-        with excutils.save_and_reraise_exception():
-            LOG.error(_LE("Agent deploy supports only HTTP URLs as "
-                          "driver_info['deploy_squashfs']. Either %s "
-                          "is not a valid HTTP URL or "
-                          "is not reachable."), rootfs)
-    return rootfs
 
 
 def _clean_up_images(task):
@@ -203,13 +158,8 @@ class BareonDeploy(base.DeployInterface):
         :param task: a TaskManager instance
         :raises: MissingParameterValue
         """
-        node = task.node
-        params = self._get_boot_files(node)
-        error_msg = _('Node %s failed to validate deploy image info. Some '
-                      'parameters were missing') % node.uuid
-        deploy_utils.check_for_missing_params(params, error_msg)
 
-        self._parse_driver_info(node)
+        _NodeDriverInfoAdapter(task.node)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task):
@@ -223,7 +173,7 @@ class BareonDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         :returns: status of the deploy. One of ironic.common.states.
         """
-        self._do_pxe_boot(task)
+        manager_utils.node_power_action(task, states.REBOOT)
         return states.DEPLOYWAIT
 
     @task_manager.require_exclusive_lock
@@ -243,7 +193,8 @@ class BareonDeploy(base.DeployInterface):
         """
         self._fetch_resources(task)
         self._validate_deployment_config(task)
-        self._prepare_pxe_boot(task)
+        task.driver.boot.prepare_ramdisk(task,
+                                         self._build_pxe_config_options(task))
 
     def clean_up(self, task):
         """Clean up the deployment environment for this node.
@@ -261,27 +212,10 @@ class BareonDeploy(base.DeployInterface):
 
         :param task: a TaskManager instance.
         """
-        # NOTE(lobur): most of the cleanup is done immediately after
-        # deployment (see end of pass_deploy_info).
-        # - PXE resources are left till the node is unprovisioned because we
-        # plan to add support of tenant PXE boot.
-        # - Resources such as provision.json are left till the node is
-        # unprovisioned to simplify debugging.
-        self._clean_up_pxe(task)
-        _clean_up_images(task)
-        self._clean_up_resource_dirs(task)
+        task.driver.boot.clean_up_ramdisk(task)
 
     def take_over(self, task):
         pass
-
-    def _clean_up_pxe(self, task):
-        """Clean up left over PXE and DHCP files."""
-        pxe_info = self._get_tftp_image_info(task.node)
-        for label in pxe_info:
-            path = pxe_info[label][1]
-            ironic_utils.unlink_without_raise(path)
-        AgentTFTPImageCache().clean_up()
-        pxe_utils.clean_up_pxe_config(task)
 
     def _fetch_resources(self, task):
         self._fetch_provision_json(task)
@@ -387,101 +321,23 @@ class BareonDeploy(base.DeployInterface):
         with open(filename, 'w') as f:
             f.write(json.dumps(actions_data))
 
-    def _clean_up_resource_dirs(self, task):
-        utils.rmtree_without_raise(
-            resources.get_abs_node_workdir_path(task.node))
-        utils.rmtree_without_raise(
-            rsync.get_abs_node_workdir_path(task.node))
-
-    def _build_instance_info_for_deploy(self, task):
-        raise NotImplementedError
-
-    def _do_pxe_boot(self, task, ports=None):
-        """Reboot the node into the PXE ramdisk.
-
-        :param task: a TaskManager instance
-        :param ports: a list of Neutron port dicts to update DHCP options on.
-            If None, will get the list of ports from the Ironic port objects.
-        """
-        dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory()
-        provider.update_dhcp(task, dhcp_opts, ports)
-        manager_utils.node_set_boot_device(task, boot_devices.PXE,
-                                           persistent=True)
-        manager_utils.node_power_action(task, states.REBOOT)
-
-    def _cache_tftp_images(self, ctx, node, pxe_info):
-        """Fetch the necessary kernels and ramdisks for the instance."""
-        fileutils.ensure_tree(
-            os.path.join(CONF.pxe.tftp_root, node.uuid))
-        LOG.debug("Fetching kernel and ramdisk for node %s",
-                  node.uuid)
-        deploy_utils.fetch_images(ctx, AgentTFTPImageCache(),
-                                  pxe_info.values())
-
-    def _prepare_pxe_boot(self, task):
-        """Prepare the files required for PXE booting the agent."""
-        pxe_info = self._get_tftp_image_info(task.node)
-
-        # Do live boot if squashfs is specified in either way.
-        is_live_boot = (task.node.driver_info.get('deploy_squashfs') or
-                        CONF.bareon.deploy_squashfs)
-        pxe_options = self._build_pxe_config_options(task, pxe_info,
-                                                     is_live_boot)
-        template = (CONF.bareon.pxe_config_template_live if is_live_boot
-                    else CONF.bareon.pxe_config_template)
-        pxe_utils.create_pxe_config(task,
-                                    pxe_options,
-                                    template)
-
-        self._cache_tftp_images(task.context, task.node, pxe_info)
-
-    def _get_tftp_image_info(self, node):
-        params = self._get_boot_files(node)
-        return pxe_utils.get_deploy_kr_info(node.uuid, params)
-
-    def _build_pxe_config_options(self, task, pxe_info, live_boot):
+    def _build_pxe_config_options(self, task):
         """Builds the pxe config options for booting agent.
 
         This method builds the config options to be replaced on
         the agent pxe config template.
 
         :param task: a TaskManager instance
-        :param pxe_info: A dict containing the 'deploy_kernel' and
-            'deploy_ramdisk' for the agent pxe config template.
         :returns: a dict containing the options to be applied on
         the agent pxe config template.
         """
-        ironic_api = (CONF.conductor.api_url or
-                      keystone.get_service_url()).rstrip('/')
 
         agent_config_opts = {
-            'deployment_aki_path': pxe_info['deploy_kernel'][1],
-            'deployment_ari_path': pxe_info['deploy_ramdisk'][1],
-            'bareon_pxe_append_params': CONF.bareon.bareon_pxe_append_params,
             'deployment_id': task.node.uuid,
-            'api-url': ironic_api,
+            'ironic_api_url': deploy_utils.get_ironic_api_url(),
         }
-
-        if live_boot:
-            agent_config_opts['rootfs-url'] = _create_rootfs_link(task)
 
         return agent_config_opts
-
-    def _get_boot_files(self, node):
-        d_info = node.driver_info
-        params = {
-            'deploy_kernel': d_info.get('deploy_kernel',
-                                        CONF.bareon.deploy_kernel),
-            'deploy_ramdisk': d_info.get('deploy_ramdisk',
-                                         CONF.bareon.deploy_ramdisk),
-        }
-        # Present only when live boot is used
-        squashfs = d_info.get('deploy_squashfs', CONF.bareon.deploy_squashfs)
-        if squashfs:
-            params['deploy_squashfs'] = squashfs
-
-        return params
 
     def _get_image_resource_mode(self):
         raise NotImplementedError
@@ -571,43 +427,6 @@ class BareonDeploy(base.DeployInterface):
 
         return images.resources
 
-    @staticmethod
-    def _parse_driver_info(node):
-        """Gets the information needed for accessing the node.
-
-        :param node: the Node object.
-        :returns: dictionary of information.
-        :raises: InvalidParameterValue if any required parameters are
-            incorrect.
-        :raises: MissingParameterValue if any required parameters are missing.
-
-        """
-        info = node.driver_info
-        d_info = {}
-        error_msgs = []
-
-        d_info['username'] = info.get('bareon_username', 'root')
-        d_info['key_filename'] = info.get('bareon_key_filename',
-                                          '/etc/ironic/bareon_key')
-
-        if not os.path.isfile(d_info['key_filename']):
-            error_msgs.append(_("SSH key file %s not found.") %
-                              d_info['key_filename'])
-
-        try:
-            d_info['port'] = int(info.get('bareon_ssh_port', 22))
-        except ValueError:
-            error_msgs.append(_("'bareon_ssh_port' must be an integer."))
-
-        if error_msgs:
-            msg = (_('The following errors were encountered while parsing '
-                     'driver_info:\n%s') % '\n'.join(error_msgs))
-            raise exception.InvalidParameterValue(msg)
-
-        d_info['script'] = info.get('bareon_deploy_script', 'bareon-provision')
-
-        return d_info
-
     def terminate_deployment(self, task):
         node = task.node
         if TERMINATE_FLAG not in node.instance_info:
@@ -670,7 +489,7 @@ class BareonVendor(base.VendorInterface):
         """
         return COMMON_PROPERTIES
 
-    def validate(self, task, method, **kwargs):
+    def validate(self, task, method=None, **kwargs):
         """Validate the driver-specific Node deployment info.
 
         :param task: a TaskManager instance
@@ -689,7 +508,7 @@ class BareonVendor(base.VendorInterface):
         if not kwargs.get('address'):
             raise exception.MissingParameterValue(_('Bareon must pass '
                                                     'address of a node.'))
-        BareonDeploy._parse_driver_info(task.node)
+        _NodeDriverInfoAdapter(task.node)
 
     def validate_switch_boot(self, task, **kwargs):
         if not kwargs.get('image'):
@@ -717,18 +536,24 @@ class BareonVendor(base.VendorInterface):
             deploy_utils.set_failed_state(task, err_msg)
             return
 
-        params = BareonDeploy._parse_driver_info(node)
-        params['host'] = kwargs.get('address')
+        driver_info = _NodeDriverInfoAdapter(task.node)
 
         cmd = '{} --data_driver "{}" --deploy_driver "{}"'.format(
-            params.pop('script'), bareon_utils.node_data_driver(node),
+            driver_info.entry_point, bareon_utils.node_data_driver(node),
             node.instance_info['deploy_driver'])
         if CONF.debug:
             cmd += ' --debug'
         instance_info = node.instance_info
 
+        connect_args = {
+            'username': driver_info.ssh_login,
+            'key_filename': driver_info.ssh_key,
+            'host': kwargs['address']}
+        if driver_info.ssh_port:
+            connect_args['port'] = driver_info.ssh_port
+
         try:
-            ssh = bareon_utils.get_ssh_connection(task, **params)
+            ssh = bareon_utils.get_ssh_connection(task, **connect_args)
             sftp = ssh.open_sftp()
 
             self._check_bareon_version(ssh, node.uuid)
@@ -744,7 +569,7 @@ class BareonVendor(base.VendorInterface):
                 bareon_utils.sftp_write_to(sftp, configdrive,
                                            '/tmp/config-drive.img')
 
-            out, err = self._deploy(task, ssh, cmd, **params)
+            out, err = self._deploy(task, ssh, cmd, **connect_args)
             LOG.info(_LI('[%(node)s] Bareon pass on node %(node)s'),
                      {'node': node.uuid})
             LOG.debug('[%s] Bareon stdout is: "%s"', node.uuid, out)
@@ -752,7 +577,7 @@ class BareonVendor(base.VendorInterface):
 
             self._get_boot_info(task, ssh)
 
-            self._run_actions(task, ssh, sftp, params)
+            self._run_actions(task, ssh, sftp, connect_args)
 
             manager_utils.node_power_action(task, states.POWER_OFF)
             manager_utils.node_set_boot_device(task, boot_devices.DISK,
@@ -762,8 +587,8 @@ class BareonVendor(base.VendorInterface):
         except exception.SSHConnectFailed as e:
             msg = (
                 _('[%(node)s] SSH connect to node %(host)s failed. '
-                  'Error: %(error)s') % {'host': params['host'], 'error': e,
-                                         'node': node.uuid})
+                  'Error: %(error)s') % {'host': connect_args['host'],
+                                         'error': e, 'node': node.uuid})
             self._deploy_failed(task, msg)
 
         except exception.ConfigInvalid as e:
@@ -1144,3 +969,64 @@ def get_on_fail_script_path(node):
 def get_tenant_images_json_path(node):
     return os.path.join(resources.get_node_resources_dir(node),
                         "tenant_images.json")
+
+
+# TODO(dbogun): handle all driver_info keys
+class _NodeDriverInfoAdapter(object):
+    ssh_port = None
+    # TODO(dbogun): check API way to defined access defaults
+    ssh_login = 'root'
+    ssh_key = '/etc/ironic/bareon_key'
+    entry_point = 'bareon-provision'
+
+    def __init__(self, node):
+        self.node = node
+        self._raw = self.node.driver_info
+        self._errors = []
+
+        self._extract_ssh_port()
+        self._extract_optional_parameters()
+        self._validate()
+
+        if self._errors:
+            raise exception.InvalidParameterValue(_(
+                'The following errors were encountered while parsing '
+                'driver_info:\n  {}').format('  \n'.join(self._errors)))
+
+    def _extract_ssh_port(self):
+        key = 'bareon_ssh_port'
+        try:
+            port = self._raw[key]
+            port = int(port)
+            if not 0 < port < 65536:
+                raise ValueError(
+                    'Port number {} is outside of allowed range'.format(port))
+        except KeyError:
+            port = None
+        except ValueError as e:
+            self._errors.append('{}: {}'.format(key, str(e)))
+            return
+
+        self.ssh_port = port
+
+    def _extract_optional_parameters(self):
+        for attr, name in (
+                ('ssh_key', 'bareon_key_filename'),
+                ('ssh_login', 'bareon_username'),
+                ('entry_point', 'bareon_deploy_script')):
+            try:
+                value = self._raw[name]
+            except KeyError:
+                continue
+            setattr(self, attr, value)
+
+    def _validate(self):
+        self._validate_ssh_key()
+
+    def _validate_ssh_key(self):
+        try:
+            open(self.ssh_key).close()
+        except IOError as e:
+            self._errors.append(
+                'Unable to use "{key}" as ssh private key: '
+                '{e.strerror} (errno={e.errno})'.format(key=self.ssh_key, e=e))
