@@ -1,0 +1,38 @@
+From 2e1cbe399b8a6bc9173da0e1d629103815fca609 Mon Sep 17 00:00:00 2001
+From: Andrii Ostapenko <aostapenko@mirantis.com>
+Date: Tue, 24 Jan 2017 14:11:27 +0200
+Subject: [PATCH] Makes vendor_passthru/pass_deploy_info method public
+
+---
+ ironic/api/config.py              | 1 +
+ ironic/api/controllers/v1/node.py | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ironic/api/config.py b/ironic/api/config.py
+index abf7d24..49231d5 100644
+--- a/ironic/api/config.py
++++ b/ironic/api/config.py
+@@ -35,6 +35,7 @@ app = {
+         # Old IPA ramdisk methods - will be removed in the Ocata release
+         '/v1/drivers/[a-z0-9_]*/vendor_passthru/lookup',
+         '/v1/nodes/[a-z0-9\-]+/vendor_passthru/heartbeat',
++        '/v1/nodes/[a-z0-9\-]+/vendor_passthru/pass_deploy_info',
+     ],
+ }
+ 
+diff --git a/ironic/api/controllers/v1/node.py b/ironic/api/controllers/v1/node.py
+index 598ae82..0018b54 100644
+--- a/ironic/api/controllers/v1/node.py
++++ b/ironic/api/controllers/v1/node.py
+@@ -975,7 +975,7 @@ class NodeVendorPassthruController(rest.RestController):
+         :param data: body of data to supply to the specified method.
+         """
+         cdict = pecan.request.context.to_dict()
+-        if method == 'heartbeat':
++        if method in ('heartbeat', 'pass_deploy_info'):
+             policy.authorize('baremetal:node:ipa_heartbeat', cdict, cdict)
+         else:
+             policy.authorize('baremetal:node:vendor_passthru', cdict, cdict)
+-- 
+2.7.4
+
