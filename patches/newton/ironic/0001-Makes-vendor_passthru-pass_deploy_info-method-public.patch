@@ -1,0 +1,38 @@
+From 060131deeca660b51019431091bc2506aa39465e Mon Sep 17 00:00:00 2001
+From: "Andrei V. Ostapenko" <aostapenko@mirantis.com>
+Date: Mon, 23 Jan 2017 15:58:02 +0200
+Subject: [PATCH] Makes vendor_passthru/pass_deploy_info method public
+
+---
+ ironic/api/config.py    | 1 +
+ ironic/common/policy.py | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ironic/api/config.py b/ironic/api/config.py
+index abf7d24..49231d5 100644
+--- a/ironic/api/config.py
++++ b/ironic/api/config.py
+@@ -35,6 +35,7 @@ app = {
+         # Old IPA ramdisk methods - will be removed in the Ocata release
+         '/v1/drivers/[a-z0-9_]*/vendor_passthru/lookup',
+         '/v1/nodes/[a-z0-9\-]+/vendor_passthru/heartbeat',
++        '/v1/nodes/[a-z0-9\-]+/vendor_passthru/pass_deploy_info',
+     ],
+ }
+ 
+diff --git a/ironic/common/policy.py b/ironic/common/policy.py
+index 2ff00fb..e16cf48 100644
+--- a/ironic/common/policy.py
++++ b/ironic/common/policy.py
+@@ -163,7 +163,7 @@ driver_policies = [
+ 
+ extra_policies = [
+     policy.RuleDefault('baremetal:node:vendor_passthru',
+-                       'rule:is_admin',
++                       'rule:public_api',
+                        description='Access vendor-specific Node functions'),
+     policy.RuleDefault('baremetal:driver:vendor_passthru',
+                        'rule:is_admin',
+-- 
+2.7.4
+
