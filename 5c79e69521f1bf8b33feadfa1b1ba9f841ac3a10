@@ -1,0 +1,9 @@
+Code-Review+2: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Verified+1: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Workflow+1: Oleksandr Berezovskyi <berezovskyi.oleksandr@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 24 Jan 2017 15:09:20 +0000
+Reviewed-on: https://review.openstack.org/410281
+Project: openstack/bareon-ironic
+Branch: refs/heads/master
