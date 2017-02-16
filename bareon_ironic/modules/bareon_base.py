@@ -1,7 +1,5 @@
 #
-# Copyright 2015 Mirantis, Inc.
-#
-# Copyright 2016 Cray Inc., All Rights Reserved
+# Copyright 2017 Cray Inc., All Rights Reserved
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -19,8 +17,13 @@
 Bareon deploy driver.
 """
 
+import abc
+import inspect
 import json
 import os
+import pprint
+import stat
+import sys
 
 import eventlet
 import pkg_resources
@@ -35,7 +38,6 @@ from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.common.i18n import _
-from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
@@ -496,16 +498,13 @@ class BareonVendor(base.VendorInterface):
         :param task: a TaskManager instance
         :param method: method to be validated
         """
-        if method == 'exec_actions':
+        if method in ('exec_actions', 'deploy_steps'):
             return
 
         if method == 'switch_boot':
             self.validate_switch_boot(task, **kwargs)
             return
 
-        if not kwargs.get('status'):
-            raise exception.MissingParameterValue(_('Unknown Bareon status'
-                                                    ' on a node.'))
         if not kwargs.get('address'):
             raise exception.MissingParameterValue(_('Bareon must pass '
                                                     'address of a node.'))
@@ -520,22 +519,46 @@ class BareonVendor(base.VendorInterface):
             raise exception.MissingParameterValue(_('No ssh user info '
                                                     'passed.'))
 
+    @base.passthru(['GET', 'POST'], async=False)
+    def deploy_steps(self, task, **data):
+        http_method = data.pop('http_method')
+        driver_info = _NodeDriverInfoAdapter(task.node)
+
+        if http_method == 'GET':
+            ssh_keys_step = _InjectSSHKeyStepRequest(task, driver_info)
+            return ssh_keys_step()
+
+        steps_mapping = _DeployStepMapping()
+        data = _DeployStepsAdapter(data)
+        try:
+            request_cls = steps_mapping.name_to_step[data.action]
+        except KeyError:
+            if data.action is not None:
+                raise RuntimeError(
+                    'There is no name mapping for deployment step: '
+                    '{!r}'.format(data.action))
+
+            message = (
+                'Bareon\'s callback service have failed with internall error')
+            if data.status_details:
+                message += '\nFailure details: {}'.format(
+                    pprint.pformat(data.status_details))
+            # TODO(dbogun): add support for existing log extraction mechanism
+            deploy_utils.set_failed_state(
+                self.task, message, collect_logs=False)
+        else:
+            handler = request_cls.result_handler(
+                task, driver_info, data)
+            handler()
+
+        return {'url': None}
+
     @base.passthru(['POST'])
     @task_manager.require_exclusive_lock
     def pass_deploy_info(self, task, **kwargs):
         """Continues the deployment of baremetal node."""
         node = task.node
         task.process_event('resume')
-        err_msg = _('Failed to continue deployment with Bareon.')
-
-        agent_status = kwargs.get('status')
-        if agent_status != 'ready':
-            LOG.error(_LE('Deploy failed for node %(node)s. Bareon is not '
-                          'in ready state, error: %(error)s'),
-                      {'node': node.uuid,
-                       'error': kwargs.get('error_message')})
-            deploy_utils.set_failed_state(task, err_msg)
-            return
 
         driver_info = _NodeDriverInfoAdapter(task.node)
 
@@ -618,7 +641,7 @@ class BareonVendor(base.VendorInterface):
 
     def _deploy_failed(self, task, msg):
         LOG.error(msg)
-        deploy_utils.set_failed_state(task, msg)
+        deploy_utils.set_failed_state(task, msg, collect_logs=False)
 
     def _check_bareon_version(self, ssh, node_uuid):
         try:
@@ -972,62 +995,193 @@ def get_tenant_images_json_path(node):
                         "tenant_images.json")
 
 
-# TODO(dbogun): handle all driver_info keys
-class _NodeDriverInfoAdapter(object):
-    ssh_port = None
-    # TODO(dbogun): check API way to defined access defaults
-    ssh_login = 'root'
-    ssh_key = '/etc/ironic/bareon_key'
-    entry_point = 'bareon-provision'
+class _AbstractAdapter(object):
+    def __init__(self, data):
+        self._raw = data
 
-    def __init__(self, node):
-        self.node = node
-        self._raw = self.node.driver_info
-        self._errors = []
-
-        self._extract_ssh_port()
-        self._extract_optional_parameters()
-        self._validate()
-
-        if self._errors:
-            raise exception.InvalidParameterValue(_(
-                'The following errors were encountered while parsing '
-                'driver_info:\n  {}').format('  \n'.join(self._errors)))
-
-    def _extract_ssh_port(self):
-        key = 'bareon_ssh_port'
-        try:
-            port = self._raw[key]
-            port = int(port)
-            if not 0 < port < 65536:
-                raise ValueError(
-                    'Port number {} is outside of allowed range'.format(port))
-        except KeyError:
-            port = None
-        except ValueError as e:
-            self._errors.append('{}: {}'.format(key, str(e)))
-            return
-
-        self.ssh_port = port
-
-    def _extract_optional_parameters(self):
-        for attr, name in (
-                ('ssh_key', 'bareon_key_filename'),
-                ('ssh_login', 'bareon_username'),
-                ('entry_point', 'bareon_deploy_script')):
+    def _extract_fields(self, mapping):
+        for attr, name in mapping:
             try:
                 value = self._raw[name]
             except KeyError:
                 continue
             setattr(self, attr, value)
 
+
+class _DeployStepsAdapter(_AbstractAdapter):
+    action = action_payload = None
+    status = status_details = None
+
+    def __init__(self, data):
+        super(_DeployStepsAdapter, self).__init__(data)
+
+        self._extract_fields({
+            'action': 'name',
+            'status': 'status'}.items())
+        self.action_payload = self._raw.get('payload', {})
+        self.status_details = self._raw.get('status-details', '')
+
+
+# TODO(dbogun): handle all driver_info keys
+class _NodeDriverInfoAdapter(_AbstractAdapter):
+    _exc_prefix = 'driver_info: '
+
+    ssh_port = None
+    # TODO(dbogun): check API way to defined access defaults
+    ssh_login = 'root'
+    ssh_key = '/etc/ironic/bareon_key'
+    ssh_key_pub = None
+    entry_point = 'bareon-provision'
+
+    def __init__(self, node):
+        super(_NodeDriverInfoAdapter, self).__init__(node.driver_info)
+        self.node = node
+
+        self._extract_fields({
+            'ssh_port': 'bareon_ssh_port',
+            'ssh_key': 'bareon_key_filename',
+            'ssh_key_pub': 'bareon_public_key_filename',
+            'ssh_login': 'bareon_username',
+            'entry_point': 'bareon_deploy_script'}.items())
+        self._process()
+        self._validate()
+
+    def _process(self):
+        if self.ssh_key_pub is None:
+            self.ssh_key_pub = '{}.pub'.format(self.ssh_key)
+
+        if self.ssh_port is not None:
+            self.ssh_port = int(self.ssh_port)
+            if not 0 < self.ssh_port < 65536:
+                raise exception.InvalidParameterValue(
+                    '{}Invalid SSH port number({}) is outside of allowed '
+                    'range.'.format(self._exc_prefix, 'bareon_ssh_port'))
+
     def _validate(self):
         self._validate_ssh_key()
 
     def _validate_ssh_key(self):
+        missing = []
+        pkey_stats = None
+        for idx, target in enumerate((self.ssh_key, self.ssh_key_pub)):
+            try:
+                target_stat = os.stat(target)
+                if not idx:
+                    pkey_stats = target_stat
+            except OSError as e:
+                missing.append(e)
+
+        missing = ['{0.filename}: {0.strerror}'.format(x) for x in missing]
+        if missing:
+            raise exception.InvalidParameterValue(
+                '{}Unable to use SSH key:\n{}'.format(
+                    self._exc_prefix, '\n'.join(missing)))
+
+        issue = None
+        if not stat.S_ISREG(pkey_stats.st_mode):
+            issue = 'SSH private key {!r} is not a regular file.'.format(
+                self.ssh_key)
+        if pkey_stats.st_mode & 0o177:
+            issue = 'Permissions {} for {!r} are too open.'.format(
+                oct(pkey_stats.st_mode & 0o777), self.ssh_key)
+
+        if issue:
+            raise exception.InvalidParameterValue(issue)
+
+
+@six.add_metaclass(abc.ABCMeta)
+class _AbstractDeployStepHandler(object):
+    def __init__(self, task, driver_info):
+        self.task = task
+        self.driver_info = driver_info
+
+    @abc.abstractmethod
+    def __call__(self):
+        pass
+
+
+@six.add_metaclass(abc.ABCMeta)
+class _AbstractDeployStepResult(_AbstractDeployStepHandler):
+    def __init__(self, task, driver_info, step_info):
+        super(_AbstractDeployStepResult, self).__init__(task, driver_info)
+        self.step_info = step_info
+
+    def __call__(self):
+        if not self.step_info.status:
+            self._handle_error()
+            return
+
+        return self._handle()
+
+    @abc.abstractmethod
+    def _handle(self):
+        pass
+
+    def _handle_error(self):
+        message = 'Deployment step "{}" have failed: {}'.format(
+            self.step_info.action, self.step_info.status_details)
+        # TODO(dbogun): add support for existing log extraction mechanism
+        deploy_utils.set_failed_state(self.task, message, collect_logs=False)
+
+
+@six.add_metaclass(abc.ABCMeta)
+class _AbstractDeployStepRequest(_AbstractDeployStepHandler):
+    @abc.abstractproperty
+    def name(self):
+        pass
+
+    @abc.abstractproperty
+    def result_handler(self):
+        pass
+
+    def __call__(self):
+        payload = self._handle()
+        return {
+            'name': self.name,
+            'payload': payload}
+
+    @abc.abstractmethod
+    def _handle(self):
+        pass
+
+
+class _InjectSSHKeyStepResult(_AbstractDeployStepResult):
+    def _handle(self):
+        pass
+
+
+class _InjectSSHKeyStepRequest(_AbstractDeployStepRequest):
+    name = 'inject-ssh-keys'
+    result_handler = _InjectSSHKeyStepResult
+
+    def _handle(self):
         try:
-            open(self.ssh_key).close()
+            with open(self.driver_info.ssh_key_pub) as data:
+                ssh_key = data.read()
         except IOError as e:
-            self._errors.append(
-                'Unable to use "{key}" as ssh private key: '
-                '{e.strerror} (errno={e.errno})'.format(key=self.ssh_key, e=e))
+            raise bareon_exception.DeployTaskError(
+                name=type(self).__name__, details=e)
+
+        return {
+            'ssh-keys': {
+                self.driver_info.ssh_login: [ssh_key]}}
+
+
+class _DeployStepMapping(object):
+    def __init__(self):
+        self.steps = []
+
+        base_cls = _AbstractDeployStepRequest
+        target = sys.modules[__name__]
+        for name in dir(target):
+            value = getattr(target, name)
+            if (inspect.isclass(value)
+                    and issubclass(value, base_cls)
+                    and value is not base_cls):
+                self.steps.append(value)
+
+        self.name_to_step = {}
+        self.step_to_name = {}
+        for task in self.steps:
+            self.name_to_step[task.name] = task
+            self.step_to_name[task] = task.name

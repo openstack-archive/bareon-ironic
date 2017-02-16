@@ -1,5 +1,5 @@
 #
-# Copyright 2016 Cray Inc., All Rights Reserved
+# Copyright 2017 Cray Inc., All Rights Reserved
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -13,6 +13,8 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import fixtures
+
 from ironic.tests import base
 from ironic.tests.unit.db import base as db_base
 
@@ -22,4 +24,9 @@ class AbstractTestCase(base.TestCase):
 
 
 class AbstractDBTestCase(db_base.DbTestCase):
-    pass
+    def setUp(self):
+        super(AbstractDBTestCase, self).setUp()
+
+        self.config(enabled_drivers=['bare_swift_ssh'])
+
+        self.temp_dir = self.useFixture(fixtures.TempDir())

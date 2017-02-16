@@ -1,5 +1,5 @@
 #
-# Copyright 2016 Cray Inc., All Rights Reserved
+# Copyright 2017 Cray Inc., All Rights Reserved
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -32,13 +32,6 @@ SWIFT_DEPLOY_IMAGE_MODE = resources.PullSwiftTempurlResource.MODE
 
 
 class BareonBaseTestCase(base.AbstractDBTestCase):
-    def setUp(self):
-        super(BareonBaseTestCase, self).setUp()
-
-        self.config(enabled_drivers=['bare_swift_ssh'])
-
-        self.temp_dir = self.useFixture(fixtures.TempHomeDir())
-
     @mock.patch.object(bareon_base.BareonDeploy,
                        "_get_deploy_driver",
                        mock.Mock(return_value="test_driver"))
@@ -237,6 +230,103 @@ class TestDeploymentConfigValidator(base.AbstractTestCase):
         self.assertRaises(
             exception.InvalidParameterValue, validator,
             self.tmpdir.join('corrupted.json'))
+
+
+class TestVendorDeployment(base.AbstractDBTestCase):
+    temp_dir = None
+
+    ssh_key = ssh_key_pub = node = None
+    ssh_key_payload = 'SSH KEY (private)'
+    ssh_key_pub_payload = 'SSH KEY (public)'
+
+    def test_deploy_steps_get(self):
+        vendor_iface = bareon_base.BareonVendor()
+        args = {
+            'http_method': 'GET'}
+
+        with task_manager.acquire(
+                self.context, self.node.uuid,
+                driver_name='bare_swift_ssh') as task:
+            step = vendor_iface.deploy_steps(task, **args)
+
+        expected_step = {
+            'name': 'inject-ssh-keys',
+            'payload': {
+                'ssh-keys': {
+                    'root': [self.ssh_key_pub_payload]}}}
+
+        self.assertEqual(expected_step, step)
+
+    @mock.patch.object(bareon_base._InjectSSHKeyStepResult, '_handle')
+    def test_deploy_steps_post(self, result_handler):
+        vendor_iface = bareon_base.BareonVendor()
+        args = {
+            'http_method': 'POST',
+            'name': 'inject-ssh-keys',
+            'status': True}
+
+        with task_manager.acquire(
+                self.context, self.node.uuid,
+                driver_name='bare_swift_ssh') as task:
+            step = vendor_iface.deploy_steps(task, **args)
+
+        expected_step = {'url': None}
+
+        self.assertEqual(expected_step, step)
+        self.assertEqual(1, result_handler.call_count)
+
+    @mock.patch('ironic.drivers.modules.deploy_utils.set_failed_state')
+    def test_deploy_steps_post_fail(self, set_failed_state):
+        vendor_iface = bareon_base.BareonVendor()
+        args = {
+            'http_method': 'POST',
+            'name': 'inject-ssh-keys',
+            'status': False,
+            'status-details': 'Error during step execution.'}
+
+        with task_manager.acquire(
+                self.context, self.node.uuid,
+                driver_name='bare_swift_ssh') as task:
+            step = vendor_iface.deploy_steps(task, **args)
+
+        expected_step = {'url': None}
+
+        self.assertEqual(expected_step, step)
+        self.assertEqual(1, set_failed_state.call_count)
+
+    @mock.patch('ironic.drivers.modules.deploy_utils.set_failed_state')
+    def test_deploy_steps_post_fail_unbinded(self, set_failed_state):
+        vendor_iface = bareon_base.BareonVendor()
+        args = {
+            'http_method': 'POST',
+            'name': None,
+            'status': False,
+            'status-details': 'Error during step execution.'}
+
+        with task_manager.acquire(
+                self.context, self.node.uuid,
+                driver_name='bare_swift_ssh') as task:
+            step = vendor_iface.deploy_steps(task, **args)
+
+        expected_step = {'url': None}
+
+        self.assertEqual(expected_step, step)
+        self.assertEqual(1, set_failed_state.call_count)
+
+    def setUp(self):
+        super(TestVendorDeployment, self).setUp()
+
+        self.ssh_key = self.temp_dir.join('bareon-ssh.key')
+        self.ssh_key_pub = self.ssh_key + '.pub'
+
+        open(self.ssh_key, 'wt').write('SSH KEY (private)')
+        open(self.ssh_key_pub, 'wt').write('SSH KEY (public)')
+
+        self.node = test_utils.create_test_node(
+            self.context,
+            driver_info={
+                'bareon_key_filename': self.ssh_key,
+                'bareon_username': 'root'})
 
 
 class DummyError(Exception):
