@@ -15,6 +15,8 @@
 
 """Bareon driver exceptions"""
 
+import pprint
+
 from ironic.common import exception
 from ironic.common.i18n import _
 
@@ -46,3 +48,19 @@ class DeployTerminationSucceed(exception.IronicException):
 
 class BootSwitchFailed(exception.IronicException):
     message = _("Boot switch failed. Error: %(error)s")
+
+
+class DeployProtocolError(exception.IronicException):
+    _msg_fmt = _('Corrupted deploy protocol message: %(details)s\n%(payload)s')
+
+    def __init__(self, message=None, **substitute):
+        payload = substitute.pop('message', {})
+        payload = pprint.pformat(payload)
+
+        super(DeployProtocolError, self).__init__(
+            message, payload=payload, **substitute)
+
+
+class DeployTaskError(exception.IronicException):
+    _msg_fmt = _(
+        'Node deploy task "%(name)s" have failed: %(details)s')
