@@ -38,7 +38,6 @@ from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.common.i18n import _
-from ironic.common.i18n import _LI
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
@@ -594,7 +593,7 @@ class BareonVendor(base.VendorInterface):
                                            '/tmp/config-drive.img')
 
             out, err = self._deploy(task, ssh, cmd, **connect_args)
-            LOG.info(_LI('[%(node)s] Bareon pass on node %(node)s'),
+            LOG.info('[%(node)s] Bareon pass on node %(node)s',
                      {'node': node.uuid})
             LOG.debug('[%s] Bareon stdout is: "%s"', node.uuid, out)
             LOG.debug('[%s] Bareon stderr is: "%s"', node.uuid, err)
@@ -621,7 +620,7 @@ class BareonVendor(base.VendorInterface):
             self._deploy_failed(task, msg)
 
         except bareon_exception.DeployTerminationSucceed:
-            LOG.info(_LI('[%(node)s] Deployment was terminated'),
+            LOG.info('[%(node)s] Deployment was terminated',
                      {'node': node.uuid})
 
         except Exception as e:
@@ -634,7 +633,7 @@ class BareonVendor(base.VendorInterface):
 
         else:
             task.process_event('done')
-            LOG.info(_LI('Deployment to node %s done'), task.node.uuid)
+            LOG.info('Deployment to node %s done', task.node.uuid)
 
         finally:
             self._clean_up_deployment_resources(task)
@@ -648,7 +647,7 @@ class BareonVendor(base.VendorInterface):
             stdout, stderr = processutils.ssh_execute(
                 ssh, 'cat /etc/bareon-release')
 
-            LOG.info(_LI("[{0}] Tracing Bareon version.\n{1}").format(
+            LOG.info("[{0}] Tracing Bareon version.\n{1}".format(
                 node_uuid, stdout))
 
             version = ""
@@ -678,9 +677,9 @@ class BareonVendor(base.VendorInterface):
             stdout, stderr = processutils.ssh_execute(
                 ssh, 'cat /tmp/boot_entries.json')
         except processutils.ProcessExecutionError as exec_err:
-            LOG.warning(_LI('[%(node)s] Error getting boot info. '
-                            'Error: %(error)s') % {'node': node_uuid,
-                                                   'error': exec_err})
+            LOG.warning('[%(node)s] Error getting boot info. '
+                        'Error: %(error)s' % {'node': node_uuid,
+                                              'error': exec_err})
             raise
         else:
             multiboot_info = json.loads(stdout)
@@ -693,7 +692,7 @@ class BareonVendor(base.VendorInterface):
     def _run_actions(self, task, ssh, sftp, sshparams):
         actions_path = get_actions_json_path(task.node)
         if not os.path.exists(actions_path):
-            LOG.info(_LI("[%(node)s] No actions specified. Skipping")
+            LOG.info("[%(node)s] No actions specified. Skipping"
                      % {'node': task.node.uuid})
             return
 
@@ -713,9 +712,9 @@ class BareonVendor(base.VendorInterface):
             stdout, stderr = processutils.ssh_execute(
                 ssh, 'cat /var/log/bareon.log')
         except processutils.ProcessExecutionError as exec_err:
-            LOG.warning(_LI('[%(node)s] Error getting Bareon log. '
-                            'Error: %(error)s') % {'node': node_uuid,
-                                                   'error': exec_err})
+            LOG.warning('[%(node)s] Error getting Bareon log. '
+                        'Error: %(error)s' % {'node': node_uuid,
+                                              'error': exec_err})
         else:
             LOG.info("[{1}] {0} Start Bareon log {0}\n{2}\n"
                      "[{1}] {0} End Bareon log {0}".format("#" * 20,
@@ -728,11 +727,11 @@ class BareonVendor(base.VendorInterface):
         try:
             on_fail_script_path = get_on_fail_script_path(node)
             if not os.path.exists(on_fail_script_path):
-                LOG.info(_LI("[%(node)s] No on_fail_script passed. Skipping")
+                LOG.info("[%(node)s] No on_fail_script passed. Skipping"
                          % {'node': node_uuid})
                 return
 
-            LOG.debug(_LI('[%(node)s] Uploading on_fail script to the node.'),
+            LOG.debug('[%(node)s] Uploading on_fail script to the node.',
                       {'node': node_uuid})
             sftp.put(on_fail_script_path, '/tmp/bareon_on_fail.sh')
 
@@ -742,17 +741,17 @@ class BareonVendor(base.VendorInterface):
                 ssh, "bash %s" % '/tmp/bareon_on_fail.sh')
 
         except processutils.ProcessExecutionError as ex:
-            LOG.warning(_LI('[%(node)s] Error executing OnFail script. '
-                            'Error: %(er)s') % {'node': node_uuid, 'er': ex})
+            LOG.warning('[%(node)s] Error executing OnFail script. '
+                        'Error: %(er)s' % {'node': node_uuid, 'er': ex})
 
         except exception.SSHConnectFailed as ex:
-            LOG.warning(_LI('[%(node)s] SSH connection error. '
-                            'Error: %(er)s') % {'node': node_uuid, 'er': ex})
+            LOG.warning('[%(node)s] SSH connection error. '
+                        'Error: %(er)s' % {'node': node_uuid, 'er': ex})
 
         except Exception as ex:
-            LOG.warning(_LI('[%(node)s] Unknown error. '
-                            'Error: %(error)s') % {'node': node_uuid,
-                                                   'error': ex})
+            LOG.warning('[%(node)s] Unknown error. '
+                        'Error: %(error)s' % {'node': node_uuid,
+                                              'error': ex})
         else:
             LOG.info(
                 "{0} [{1}] on_fail sctipt result below {0}".format("#" * 40,
