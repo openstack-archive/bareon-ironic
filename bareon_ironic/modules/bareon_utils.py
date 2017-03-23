@@ -23,7 +23,7 @@ from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common import keystone
 from ironic.common import utils
-from ironic.common.i18n import _, _LW
+from ironic.common.i18n import _
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -185,8 +185,8 @@ def umount_without_raise(loc, *args):
     try:
         utils.umount(loc, *args)
     except processutils.ProcessExecutionError as e:
-        LOG.warn(_LW("umount_without_raise unable to umount dir %(path)s, "
-                     "error: %(e)s"), {'path': loc, 'e': e})
+        LOG.warn("umount_without_raise unable to umount dir %(path)s, "
+                 "error: %(e)s", {'path': loc, 'e': e})
 
 
 def md5(url):
