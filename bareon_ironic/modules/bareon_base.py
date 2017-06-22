@@ -149,7 +149,6 @@ class BareonDeploy(base.DeployInterface):
         """
 
         _NodeDriverInfoAdapter(task.node)
-        self._validate_deployment_config(task)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task):
@@ -183,6 +182,7 @@ class BareonDeploy(base.DeployInterface):
         """
 
         self._fetch_resources(task)
+        self._validate_deployment_config(task)
 
         # Temporary set possible missing driver_info fields. This changes will
         # not become persistent until someone do
