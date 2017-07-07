@@ -1,0 +1,10 @@
+Code-Review+1: Juan J. Martínez <jmartinez@cray.com>
+Code-Review+1: Benjamin Michael Cooper <bcooper@cray.com>
+Code-Review+2: Doug Szumski <dszumski@cray.com>
+Workflow+1: Doug Szumski <dszumski@cray.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 07 Jul 2017 15:24:56 +0000
+Reviewed-on: https://review.openstack.org/481651
+Project: openstack/bareon-ironic
+Branch: refs/heads/master
