@@ -7,5 +7,6 @@ testrepository>=0.0.18 # Apache-2.0/BSD
 
 mock>=2.0  # BSD
 
+oslo.db<4.19
 # this is required for the docs build jobs
 sphinx!=1.3b1,<1.4,>=1.2.1 # BSD
