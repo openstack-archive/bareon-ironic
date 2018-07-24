@@ -606,7 +606,7 @@ In the example of partitions schema you may have noticed uneven size values like
   declare a physical volume of size 5000 MiB, the volume group will get 4936 MiB
   available. If there are two physical volumes of 5000 MiB, the resulting
   volume group will have 9872 MiB (10000 - 2*64) available. This extra space is
-  left for LVM metadata. 64 MiB value can be overriden by lvm_meta_size attribute
+  left for LVM metadata. 64 MiB value can be overridden by lvm_meta_size attribute
   of the pv, see :ref:`partitions_pv`.
 
 - In case of multi-image deployment (see :ref:`images`) an additional 100 MiB partition
