@@ -645,7 +645,7 @@ URL sources are supported:
 
 - **http**. URL structure is "http://site/path_to_resource". Contents should
   be directly accessible via URL, with no auth. Use "raw" links in services like
-  http://paste.openstack.org/. The default_resource_storage_prefix option of
+  https://paste.openstack.org/. The default_resource_storage_prefix option of
   */etc/ironic/ironic.conf* can be used to shorten the URL, e.g. set
   to "http://my-config-site/raw/". This storage does not support
   authentication/authorization and thus it does not have tenant isolation.

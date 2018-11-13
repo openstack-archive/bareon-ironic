@@ -67,4 +67,4 @@ After steps above the node is ready for deploying. User can invoke
 Guide
 
 .. [1] https://github.com/openstack/bareon
-.. [2] http://docs.openstack.org/developer/ironic/deploy/install-guide.html
+.. [2] https://docs.openstack.org/developer/ironic/deploy/install-guide.html
