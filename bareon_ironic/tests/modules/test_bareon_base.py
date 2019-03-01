@@ -13,7 +13,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import json
 import os
 
 import fixtures
@@ -21,6 +20,7 @@ import mock
 from ironic.common import exception
 from ironic.conductor import task_manager
 from ironic.tests.unit.objects import utils as test_utils
+from oslo_serialization import jsonutils
 
 from bareon_ironic.modules import bareon_base
 from bareon_ironic.modules import bareon_utils
@@ -160,7 +160,7 @@ class TestDeploymentConfigValidator(base.AbstractTestCase):
 
         for name in self.payload:
             with open(self.tmpdir.join(name), 'wt') as stream:
-                json.dump(self.payload[name], stream)
+                jsonutils.dump(self.payload[name], stream)
         with open(self.tmpdir.join('corrupted.json'), 'wt') as stream:
             stream.write('{"corrupted-json-file')
 

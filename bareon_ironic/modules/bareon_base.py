@@ -19,7 +19,6 @@ Bareon deploy driver.
 
 import abc
 import inspect
-import json
 import os
 import pprint
 import stat
@@ -32,6 +31,7 @@ import six
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log
+from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 
 from ironic.common import boot_devices
@@ -111,7 +111,7 @@ def _clean_up_images(task):
         return
     try:
         with open(get_tenant_images_json_path(node)) as f:
-            images_json = json.loads(f.read())
+            images_json = jsonutils.loads(f.read())
     except Exception as ex:
         LOG.warning("Cannot find tenant_images.json for the %s node to"
                     "finish cleanup." % node)
@@ -245,7 +245,7 @@ class BareonDeploy(base.DeployInterface):
         LOG.info('[{0}] Writing provision.json to:\n{1}'.format(
             task.node.uuid, filename))
         with open(filename, 'w') as f:
-            f.write(json.dumps(config))
+            f.write(jsonutils.dumps(config))
 
     def _validate_deployment_config(self, task):
         data_driver_name = bareon_utils.node_data_driver(task.node)
@@ -322,7 +322,7 @@ class BareonDeploy(base.DeployInterface):
         LOG.info('[{0}] Writing actions.json to:\n{1}'.format(
             task.node.uuid, filename))
         with open(filename, 'w') as f:
-            f.write(json.dumps(actions_data))
+            f.write(jsonutils.dumps(actions_data))
 
     def _build_pxe_config_options(self, task):
         """Builds the pxe config options for booting agent.
@@ -375,7 +375,7 @@ class BareonDeploy(base.DeployInterface):
                 invalid_images.append(
                     'Invalid "image" record - there is no key {key} (#{idx}: '
                     '{payload})'.format(
-                        key=e, idx=idx, payload=json.dumps(image)))
+                        key=e, idx=idx, payload=jsonutils.dumps(image)))
                 continue
 
             origin_names[idx] = image['name']
@@ -426,7 +426,7 @@ class BareonDeploy(base.DeployInterface):
         # NOTE(lobur): serialize tenant images json for further cleanup.
         images_json = images.to_dict()
         with open(get_tenant_images_json_path(task.node), 'w') as f:
-            f.write(json.dumps(images_json))
+            f.write(jsonutils.dumps(images_json))
 
         return images.resources
 
@@ -683,7 +683,7 @@ class BareonVendor(base.VendorInterface):
                                                    'error': exec_err})
             raise
         else:
-            multiboot_info = json.loads(stdout)
+            multiboot_info = jsonutils.loads(stdout)
             bareon_utils.change_node_dict(node, 'instance_info', {
                 'multiboot_info': multiboot_info
             })
@@ -772,7 +772,7 @@ class BareonVendor(base.VendorInterface):
             return
 
         with open(filename) as f:
-            actions_data = json.loads(f.read())
+            actions_data = jsonutils.loads(f.read())
 
         controller = actions.ActionController(task, actions_data)
         controller.cleanup_action_resources()
@@ -963,7 +963,7 @@ class DeploymentConfigValidator(object):
 
         try:
             with open(deployment_config, 'rt') as stream:
-                payload = json.load(stream)
+                payload = jsonutils.load(stream)
             self._driver.validate_data(payload)
         except (IOError, ValueError, TypeError) as e:
             raise exception.InvalidParameterValue(
